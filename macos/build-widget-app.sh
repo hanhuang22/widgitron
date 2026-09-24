@@ -13,7 +13,7 @@ fi
 
 mkdir -p "$extension/Contents/MacOS"
 cp "$source_dir/Info.plist" "$extension/Contents/Info.plist"
-swiftc -parse-as-library -O -target arm64-apple-macosx14.0 \
+swiftc -parse-as-library -application-extension -O -target arm64-apple-macosx14.0 \
   -framework SwiftUI -framework WidgetKit \
   "$source_dir/WidgitronWidgets.swift" \
   -o "$extension/Contents/MacOS/WidgitronWidgets"
@@ -23,4 +23,5 @@ swiftc -parse-as-library -O -target arm64-apple-macosx14.0 \
 codesign --force --sign - --entitlements "$source_dir/Widget.entitlements" "$extension"
 codesign --force --sign - --entitlements "$source_dir/Host.entitlements" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
-printf 'Built WidgetKit app: %s\n' "$app"
+printf 'Embedded an experimental WidgetKit extension: %s\n' "$app"
+printf 'Warning: the ad-hoc signature has no Apple Team ID, so App Group data access is unavailable; the widget has not appeared in the gallery on the tested Mac.\n' >&2

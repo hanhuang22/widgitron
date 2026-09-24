@@ -7,7 +7,7 @@ Widgitron has three surfaces:
 | Dashboard | Configure services, inspect data, control visibility | Application launch or menu bar **Dashboard** | The app remains in the menu bar |
 | Sidebar | Read several modules together | Dashboard **Open Sidebar** or menu bar **Sidebar** | Close button; **Pin Display** also opens it on the next launch |
 | Independent widget | Keep one module in its own movable window | Dashboard **Show Widget** | Widget close button or **Hide All Widgets** |
-| Native quota widget | Glance at quotas on the desktop or in Notification Center | Desktop **Edit Widgets** → search Widgitron | Remove it through macOS widget editing |
+| Native quota widget (experimental) | Glance at quotas on the desktop or in Notification Center | Intended: Desktop **Edit Widgets** → search Widgitron | Remove it through macOS widget editing |
 
 ## Startup and state
 
@@ -48,7 +48,7 @@ Widgitron has three surfaces:
   are Windows features.
 - The interface language defaults to Simplified Chinese on macOS and can be
   switched to English in Settings. The choice is stored in `app_config.json`.
-- The WidgetKit extension reads a credential-free quota snapshot from the
+- The WidgetKit extension is designed to read a credential-free quota snapshot from the
   `group.com.evan.widgitron` app group. The app updates it on launch, quota
   refresh, settings changes, and manual quota edits. WidgetKit schedules the
   extension's timeline refresh, so it is not a live React window.
@@ -56,6 +56,9 @@ Widgitron has three surfaces:
 ## Boundaries
 
 Desktop fixation uses the existing live window at desktop level. The separate
-native quota widget appears in the macOS widget gallery. The update installer
+native quota widget is intended to appear in the macOS widget gallery. The
+current ad-hoc build registers the extension but WidgetKit cannot load its
+descriptors, so the gallery entry is unavailable. App Group access also needs
+Apple team signing and authorization. The update installer
 opens a disk image for manual installation. Floating widget and sidebar windows
 still use the existing custom frameless design.

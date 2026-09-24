@@ -2420,7 +2420,7 @@ function App() {
                   </p>
                   {isMacOS && (
                     <p className={`-mt-3 mb-5 text-xs ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-                      To add the native quota widget, right-click the desktop, choose Edit Widgets, and search Widgitron. macOS controls its refresh schedule.
+                      The system quota widget is still in development. Use Fix on Desktop to keep the quota window on the desktop.
                     </p>
                   )}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

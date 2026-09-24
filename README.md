@@ -78,11 +78,15 @@ pnpm tauri build
 ### macOS build
 
 Install the Xcode Command Line Tools, Node.js, and pnpm, then run
-`pnpm macos:build`. This builds the Tauri app and embeds the native WidgetKit
-quota extension. The Rust build compiles its own OpenSSL for SSH support, so a
+`pnpm macos:build`. This builds the Tauri app and embeds an experimental native
+WidgetKit quota extension. The Rust build compiles its own OpenSSL for SSH support, so a
 separate Homebrew OpenSSL installation is not required. The local app is under
-`src-tauri/target/release/bundle/macos/`. The build script uses ad-hoc signing;
-distribution requires a matching Apple signing identity and App Group capability.
+`src-tauri/target/release/bundle/macos/`. The build script uses ad-hoc signing.
+On macOS 26.5, this extension registers with PlugInKit but fails WidgetKit's
+descriptor query and does not appear in the widget gallery. The system also
+rejects its App Group access without an Apple Team ID. It needs a validated
+Xcode Widget Extension target, matching team signing for the app and extension,
+and authorized App Group capability before it can be offered as a working widget.
 
 On macOS, Widgitron starts with the main dashboard. Open the sidebar from the
 dashboard's **Open Sidebar** button or the menu bar icon. The sidebar stays
@@ -102,10 +106,11 @@ For each macOS widget, choose **Fix on Desktop** in its controls or on the
 dashboard to keep it with the desktop when using Show Desktop. **Keep above
 other windows** switches it back to a floating window. The desktop mode uses
 the existing live widget window; it is not a WidgetKit extension.
-The native quota widget is separate: right-click the desktop, choose **Edit
-Widgets**, and search for **Widgitron**. It reads a display-only snapshot shared
-by the app; WidgetKit decides when to refresh it. Launch the app once after
-installing it so the widget appears in the gallery.
+The planned native quota widget is separate from **Fix on Desktop**. Its current
+ad-hoc build is not visible in **Edit Widgets**, even after the app is installed
+and launched. A DMG only transports the `.app`; using one does not resolve the
+WidgetKit issue. Once a signed extension is validated, it will read a display-only
+snapshot shared by the app and refresh on WidgetKit's schedule.
 When a macOS update is available, the app opens its disk image for manual installation.
 
 ## 🤝 Contributing

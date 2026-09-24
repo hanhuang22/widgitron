@@ -22,7 +22,7 @@ const ZH: Record<string, string> = {
   "Interface Language": "界面语言",
   "Change the language in the dashboard, sidebar, and widgets.": "切换主界面、侧边栏和浮窗的显示语言。",
   "The sidebar groups all modules in one place. Open independent floating widgets only when needed; use the menu bar icon to reopen this window or the sidebar.": "侧边栏集中显示各模块；需要时再打开独立浮窗。菜单栏图标可以重新打开主界面或侧边栏。",
-  "To add the native quota widget, right-click the desktop, choose Edit Widgets, and search Widgitron. macOS controls its refresh schedule.": "添加系统额度小组件：右键点击桌面，选择“编辑小组件”，搜索 Widgitron。刷新时间由 macOS 安排。",
+  "The system quota widget is still in development. Use Fix on Desktop to keep the quota window on the desktop.": "系统额度小组件仍在开发中。当前可用“固定到桌面”将额度浮窗保留在桌面。",
   "Track AI agent & API limits on your desktop": "在桌面查看 AI Agent 与 API 额度",
   "Floating desktop monitoring for GPU clusters": "在桌面监控 GPU 集群",
   "Track conference deadlines on your desktop": "在桌面查看会议截止日期",
