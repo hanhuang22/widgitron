@@ -21,7 +21,7 @@ use crate::models::AppConfig;
 const SIDEBAR_LABEL: &str = "sidebar";
 // A generous initial cross-axis size. The edge-axis length remains dynamic so
 // a newly docked sidebar nearly fills whichever monitor edge it uses.
-const DEFAULT_THICKNESS_LOGICAL: f64 = 480.0;
+const DEFAULT_THICKNESS_LOGICAL: f64 = 320.0;
 const MIN_THICKNESS_LOGICAL: f64 = 320.0;
 const MIN_EDGE_LENGTH_LOGICAL: f64 = 360.0;
 const CROSS_AXIS_MARGIN_LOGICAL: f64 = 6.0;
@@ -1395,10 +1395,10 @@ mod tests {
         );
         let top = sidebar_rect(area(), DockEdge::Top, DEFAULT_THICKNESS_LOGICAL, None, 1.0);
 
-        assert_eq!(right.width, 480);
+        assert_eq!(right.width, 320);
         assert_eq!(right.height, 1028);
         assert_eq!(top.width, 1908);
-        assert_eq!(top.height, 480);
+        assert_eq!(top.height, 320);
     }
 
     #[test]

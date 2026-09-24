@@ -11,6 +11,7 @@ import type {
   PaperDeadlineInfo,
   QuotaConfig,
   QuotaItemConfig,
+  QuotaVisualizationConfig,
   ServerConfig,
   ServerGpuData,
   SidebarThemeDefinition,
@@ -20,6 +21,7 @@ import { APP_VERSION } from "../constants";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
 import { MasterSwitch } from "../components/MasterSwitch";
+import { providerSupportsQuotaVisualizations } from "../components/QuotaVisualizations";
 import { ThemeManagementSection } from "./ThemeManagementSection";
 import { listenBackendServiceError } from "../utils/backendServiceError";
 import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
@@ -124,14 +126,33 @@ const PROVIDER_LOGOS: Record<string, string> = {
 };
 
 const PROVIDER_OPTIONS = [
-  { value: "antigravity", label: "Antigravity" },
   { value: "codex", label: "Codex" },
+  { value: "claude-code", label: "Claude Code" },
   { value: "cursor", label: "Cursor" },
+  { value: "antigravity", label: "Antigravity" },
   { value: "copilot", label: "VS Code Copilot" },
   { value: "qoder-cn", label: "Qoder CN" },
   { value: "pioneer", label: "Pioneer AI" },
-  { value: "claude-code", label: "Claude Code" },
 ];
+
+/** Preferred display order for quota monitors in settings / widget. */
+const QUOTA_PROVIDER_PRIORITY: Record<string, number> = {
+  codex: 0,
+  "claude-code": 1,
+  cursor: 2,
+};
+
+function sortQuotaItemsByPreferredOrder<T extends { provider: string }>(items: T[]): T[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const pa = QUOTA_PROVIDER_PRIORITY[a.item.provider] ?? 100;
+      const pb = QUOTA_PROVIDER_PRIORITY[b.item.provider] ?? 100;
+      if (pa !== pb) return pa - pb;
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
 
 const REMOVED_QUOTA_PROVIDERS = new Set(["minimax-cn", "openai-compatible"]);
 
@@ -147,7 +168,7 @@ const PROVIDER_AUTH: Record<
   copilot: { local: true, apiKey: false, defaultMode: "local" },
   "qoder-cn": { local: true, apiKey: true, defaultMode: "local" },
   pioneer: { local: false, apiKey: true, defaultMode: "api_key" },
-  "claude-code": { local: true, apiKey: true, defaultMode: "local" },
+  "claude-code": { local: true, apiKey: false, defaultMode: "local" },
 };
 
 function getEffectiveAuthMode(q: { provider: string; auth_mode?: string | null }): AuthMode {
@@ -156,18 +177,22 @@ function getEffectiveAuthMode(q: { provider: string; auth_mode?: string | null }
 }
 
 function apiKeyPlaceholder(provider: string): string {
-  if (provider === "claude-code") return "sk-cp-... token";
   if (provider === "qoder-cn") return "pt-... PAT (optional if signed in to Qoder CN IDE)";
   if (provider === "pioneer") return "pio-... from pioneer.ai Settings";
   return "Your API key";
 }
 
 function stripUnsupportedQuotaProviders(config: QuotaConfig): QuotaConfig {
+  const filtered = (config?.items || []).filter(
+    (item) => !REMOVED_QUOTA_PROVIDERS.has(item.provider)
+  );
+  const items = config?.preferred_provider_order_applied
+    ? filtered
+    : sortQuotaItemsByPreferredOrder(filtered);
   return {
     ...config,
-    items: (config?.items || []).filter(
-      (item) => !REMOVED_QUOTA_PROVIDERS.has(item.provider)
-    ),
+    items,
+    preferred_provider_order_applied: true,
   };
 }
 
@@ -225,9 +250,304 @@ function AuthModeSwitch({
   );
 }
 
+const QUOTA_VIZ_TOGGLES = [
+  ["calendar_heatmap", "Calendar heatmap", "GitHub-style 12-week activity grid"],
+  ["daily_bars", "Daily bars", "Last 14 days as mini bar chart"],
+  ["model_breakdown", "Model breakdown", "Top models by cost or tokens"],
+] as const;
+
+function QuotaVisualizationSettings({
+  viz,
+  onChange,
+  appConfig,
+}: {
+  viz: QuotaVisualizationConfig;
+  onChange: (next: QuotaVisualizationConfig) => void;
+  appConfig: AppConfig;
+}) {
+  const enabled = (key: keyof QuotaVisualizationConfig) => viz[key] === true;
+  const showHeatmapMetric = viz.calendar_heatmap === true;
+  const showBarsMetric = viz.daily_bars === true;
+  const showModelMetric = viz.model_breakdown === true;
+
+  const setMetric = (
+    field: "heatmap_metric" | "bars_metric" | "model_metric",
+    value: string,
+  ) => {
+    onChange({ ...viz, [field]: value });
+  };
+
+  const MetricToggle = ({
+    label,
+    field,
+    options,
+    current,
+  }: {
+    label: string;
+    field: "heatmap_metric" | "bars_metric" | "model_metric";
+    options: { value: string; label: string }[];
+    current: string;
+  }) => (
+    <div className="flex items-center justify-between py-2 border-t border-white/5">
+      <div className="text-[10px] font-semibold text-slate-500">{label}</div>
+      <div className="flex rounded-lg overflow-hidden border border-white/10">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => setMetric(field, opt.value)}
+            className={`px-2.5 py-1 text-[9px] font-bold transition-colors ${
+              current === opt.value
+                ? appConfig.theme === "light"
+                  ? "bg-slate-900 text-white"
+                  : "bg-white/15 text-white"
+                : "text-slate-500 hover:text-slate-300"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      className={`p-4 border border-[var(--dashboard-border)] rounded-2xl space-y-3 ${
+        appConfig.theme === "light" ? "bg-white" : "bg-white/5"
+      }`}
+    >
+      <div className="space-y-1">
+        <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+          Analytics Visualizations
+        </div>
+        <div className="text-[10px] text-slate-500 leading-relaxed">
+          Optional charts for this monitor — heatmap, daily bars, and model breakdown.
+          Enabling these may slow quota refresh slightly.
+        </div>
+      </div>
+      {QUOTA_VIZ_TOGGLES.map(([key, title, desc]) => (
+        <div
+          key={key}
+          className="flex items-center justify-between py-2 border-t border-white/5 first:border-t-0 first:pt-0"
+        >
+          <div className="space-y-0.5 pr-3">
+            <div className={`text-[11px] font-bold ${appConfig.theme === "light" ? "text-slate-800" : "text-slate-200"}`}>
+              {title}
+            </div>
+            <div className="text-[9px] text-slate-500">{desc}</div>
+          </div>
+          <MasterSwitch
+            enabled={enabled(key)}
+            onToggle={(val) => onChange({ ...viz, [key]: val })}
+          />
+        </div>
+      ))}
+      {(showHeatmapMetric || showBarsMetric || showModelMetric) && (
+        <div className="pt-1 border-t border-white/10 space-y-0">
+          {showHeatmapMetric && (
+            <MetricToggle
+              label="Heatmap metric"
+              field="heatmap_metric"
+              current={viz.heatmap_metric ?? viz.daily_metric ?? "queries"}
+              options={[
+                { value: "queries", label: "Queries" },
+                { value: "tokens", label: "Tokens" },
+              ]}
+            />
+          )}
+          {showBarsMetric && (
+            <MetricToggle
+              label="Bars metric"
+              field="bars_metric"
+              current={viz.bars_metric ?? viz.daily_metric ?? "queries"}
+              options={[
+                { value: "queries", label: "Queries" },
+                { value: "tokens", label: "Tokens" },
+              ]}
+            />
+          )}
+          {showModelMetric && (
+            <MetricToggle
+              label="Model breakdown metric"
+              field="model_metric"
+              current={viz.model_metric ?? "spend"}
+              options={[
+                { value: "spend", label: "$" },
+                { value: "tokens", label: "Tokens" },
+              ]}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuotaItemSettingsPage({
+  q,
+  appConfig,
+  onBack,
+  onUpdateField,
+  onSave,
+  localQuota,
+}: {
+  q: QuotaItemConfig;
+  appConfig: AppConfig;
+  onBack: () => void;
+  onUpdateField: <K extends keyof QuotaItemConfig>(
+    id: string,
+    field: K,
+    val: QuotaItemConfig[K],
+    save?: boolean
+  ) => void;
+  onSave: (config: QuotaConfig) => void;
+  localQuota: QuotaConfig;
+}) {
+  const selectedProvider = PROVIDER_OPTIONS.find((p) => p.value === q.provider);
+  const authCaps = PROVIDER_AUTH[q.provider] ?? { local: true, apiKey: true, defaultMode: "local" as AuthMode };
+  const authMode = getEffectiveAuthMode(q);
+  const isCustomProvider = !PROVIDER_AUTH[q.provider];
+  const fieldClass = `w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+    appConfig.theme === "light"
+      ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
+      : "bg-black/40 border-white/10 text-white focus:bg-black/60"
+  }`;
+
+  return (
+    <section className="space-y-6">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all border ${
+            appConfig.theme === "light"
+              ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200"
+              : "bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border-white/5"
+          }`}
+        >
+          <ArrowLeft size={12} /> Back
+        </button>
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="flex-shrink-0 w-8 h-8 rounded-xl border border-[var(--dashboard-border)] flex items-center justify-center overflow-hidden"
+            style={{ background: appConfig.theme === "light" ? "#f8fafc" : "rgba(255,255,255,0.03)" }}
+          >
+            {PROVIDER_LOGOS[q.provider] ? (
+              <img src={PROVIDER_LOGOS[q.provider]} alt="" className="w-5 h-5 object-contain" draggable={false} />
+            ) : (
+              <Cpu size={14} className="text-slate-400" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <h2 className={`text-xs font-black uppercase tracking-wider truncate ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+              {selectedProvider?.label ?? q.name} Settings
+            </h2>
+            <div className="text-[10px] text-slate-500">Quota monitor options for this software</div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={`p-4 border border-[var(--dashboard-border)] rounded-2xl space-y-4 ${
+          appConfig.theme === "light" ? "bg-white" : "bg-white/5"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-1 min-w-0">
+            <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+              Authentication
+            </div>
+            <div className="text-[10px] text-slate-500">
+              Use a local IDE login, or paste an API key when the provider supports it.
+            </div>
+          </div>
+          <AuthModeSwitch
+            mode={authMode}
+            localEnabled={authCaps.local}
+            apiKeyEnabled={authCaps.apiKey}
+            onChange={(mode) => onUpdateField(q.id, "auth_mode", mode, true)}
+            appConfig={appConfig}
+          />
+        </div>
+        {authMode === "api_key" && authCaps.apiKey && (
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">API Key</label>
+            <input
+              type="password"
+              value={q.api_key || ""}
+              onChange={(e) => onUpdateField(q.id, "api_key", e.target.value)}
+              onBlur={() => onSave(localQuota)}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className={fieldClass}
+              placeholder={apiKeyPlaceholder(q.provider)}
+            />
+          </div>
+        )}
+      </div>
+
+      {isCustomProvider && (
+        <div
+          className={`p-4 border border-[var(--dashboard-border)] rounded-2xl space-y-4 ${
+            appConfig.theme === "light" ? "bg-white" : "bg-white/5"
+          }`}
+        >
+          <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
+            Custom Endpoint
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">API URL</label>
+            <input
+              type="text"
+              value={q.api_url || ""}
+              onChange={(e) => onUpdateField(q.id, "api_url", e.target.value)}
+              onBlur={() => onSave(localQuota)}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className={fieldClass}
+              placeholder="https://..."
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Max Quota</label>
+            <input
+              type="number"
+              value={q.max_quota || 0}
+              onChange={(e) => onUpdateField(q.id, "max_quota", parseFloat(e.target.value) || 0)}
+              onBlur={() => onSave(localQuota)}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className={fieldClass}
+              placeholder="100"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">JSON Path</label>
+            <input
+              type="text"
+              value={q.json_path || ""}
+              onChange={(e) => onUpdateField(q.id, "json_path", e.target.value)}
+              onBlur={() => onSave(localQuota)}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className={fieldClass}
+              placeholder="data.remaining"
+            />
+          </div>
+        </div>
+      )}
+
+      {providerSupportsQuotaVisualizations(q.provider) && (
+        <QuotaVisualizationSettings
+          viz={q.visualizations ?? localQuota.visualizations ?? {}}
+          onChange={(nextViz) => onUpdateField(q.id, "visualizations", nextViz, true)}
+          appConfig={appConfig}
+        />
+      )}
+    </section>
+  );
+}
+
 function QuotaItemCard({
   q, appConfig, openProviderId,
-  onToggleProvider, onRemove, onUpdateField, onSave, onReorderCommit, localQuota,
+  onToggleProvider, onRemove, onUpdateField, onReorderCommit, onOpenSettings,
 }: {
   q: QuotaItemConfig;
   appConfig: AppConfig;
@@ -240,16 +560,12 @@ function QuotaItemCard({
     val: QuotaItemConfig[K],
     save?: boolean
   ) => void;
-  onSave: (config: QuotaConfig) => void;
   onReorderCommit: () => void;
-  localQuota: QuotaConfig;
+  onOpenSettings: (id: string) => void;
 }) {
   const controls = useDragControls();
   const isOpen = openProviderId === q.id;
   const selectedProvider = PROVIDER_OPTIONS.find(p => p.value === q.provider) || PROVIDER_OPTIONS[0];
-  const authCaps = PROVIDER_AUTH[q.provider] ?? { local: true, apiKey: true, defaultMode: "local" as AuthMode };
-  const authMode = getEffectiveAuthMode(q);
-  const isCustomProvider = !PROVIDER_AUTH[q.provider];
 
   return (
     <Reorder.Item
@@ -325,150 +641,19 @@ function QuotaItemCard({
             </div>
           )}
         </div>
-        <AuthModeSwitch
-          mode={authMode}
-          localEnabled={authCaps.local}
-          apiKeyEnabled={authCaps.apiKey}
-          onChange={(mode) => onUpdateField(q.id, "auth_mode", mode, true)}
-          appConfig={appConfig}
-        />
+        <button
+          type="button"
+          onClick={() => onOpenSettings(q.id)}
+          title="Quota monitor settings"
+          className={`flex-shrink-0 p-2 rounded-xl border transition-all cursor-pointer ${
+            appConfig.theme === "light"
+              ? "text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-200"
+              : "text-slate-400 hover:text-white hover:bg-white/10 border-white/10"
+          }`}
+        >
+          <Settings size={14} />
+        </button>
       </div>
-      {authMode === "api_key" && authCaps.apiKey && (
-        <div className="px-4 pb-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">API Key</label>
-            <input
-              type="password"
-              value={q.api_key || ""}
-              onChange={(e) => onUpdateField(q.id, "api_key", e.target.value)}
-              onBlur={() => onSave(localQuota)}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
-                appConfig.theme === "light"
-                  ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white"
-                  : "bg-black/40 border-white/10 text-white focus:bg-black/60"
-              }`}
-              placeholder={apiKeyPlaceholder(q.provider)}
-            />
-          </div>
-        </div>
-      )}
-      {/*
-        <div className="px-4 pb-4">
-          <div
-            className={`rounded-xl border px-3 py-2.5 text-[10px] leading-relaxed ${
-              agReady
-                ? appConfig.theme === "light"
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                  : "bg-emerald-500/5 border-emerald-500/15 text-emerald-300/90"
-                : appConfig.theme === "light"
-                ? "bg-amber-50 border-amber-200 text-amber-800"
-                : "bg-amber-500/5 border-amber-500/15 text-amber-300/90"
-            }`}
-          >
-            {agStatus ? (
-              <ul className="space-y-1">
-                <li>
-                  IDE language server:{" "}
-                  <span className="font-bold">
-                    {agStatus.language_server_running ? "Running" : "Not detected"}
-                  </span>
-                </li>
-                <li>
-                  OAuth tokens:{" "}
-                  <span className="font-bold">
-                    {agStatus.has_oauth_tokens ? "Found" : "Missing — sign in via Antigravity IDE"}
-                  </span>
-                </li>
-                <li>
-                  Cloud fallback:{" "}
-                  <span className="font-bold">
-                    {agStatus.cloud_auth_ready
-                      ? "Ready"
-                      : "Needs client_secret in antigravity_oauth.json or env"}
-                  </span>
-                </li>
-                <li className="pt-1 text-[9px] opacity-80 break-all">
-                  OAuth config: <code className="font-mono">{agStatus.oauth_config_path}</code>
-                </li>
-                {agStatus.program_files_install && (
-                  <li className="pt-1 text-[9px] opacity-90">
-                    Installed under Program Files — configs are stored in AppData, not next to the .exe.
-                    Config folder: <code className="font-mono break-all">{agStatus.config_dir}</code>
-                  </li>
-                )}
-                {!agReady && agStatus.has_oauth_tokens && !agStatus.language_server_running && (
-                  <li className="pt-2 font-bold">
-                    {agStatus.cloud_auth_ready
-                      ? "Launch Antigravity IDE to refresh quota via local mode."
-                      : "Launch Antigravity IDE (recommended), or add client_secret to antigravity_oauth.json for cloud fallback."}
-                  </li>
-                )}
-              </ul>
-            ) : (
-              <>
-                Local mode reads the running Antigravity IDE. Cloud fallback needs OAuth{" "}
-                <code className="font-mono text-[9px]">client_secret</code> in{" "}
-                <code className="font-mono text-[9px]">configs/antigravity_oauth.json</code>.
-              </>
-            )}
-          </div>
-        </div>
-      */}
-      {isCustomProvider && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 px-4 pb-4">
-          <div className="space-y-1.5 md:col-span-2">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">API URL</label>
-            <input type="text" value={q.api_url || ""} onChange={(e) => onUpdateField(q.id, "api_url", e.target.value)} onBlur={() => onSave(localQuota)}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${appConfig.theme === "light" ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white" : "bg-black/40 border-white/10 text-white focus:bg-black/60"}`}
-              placeholder="https://..." />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Max Quota</label>
-            <input type="number" value={q.max_quota || 0} onChange={(e) => onUpdateField(q.id, "max_quota", parseFloat(e.target.value) || 0)} onBlur={() => onSave(localQuota)}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${appConfig.theme === "light" ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white" : "bg-black/40 border-white/10 text-white focus:bg-black/60"}`}
-              placeholder="100" />
-          </div>
-          <div className="space-y-1.5 md:col-span-3">
-            <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">JSON Path</label>
-            <input type="text" value={q.json_path || ""} onChange={(e) => onUpdateField(q.id, "json_path", e.target.value)} onBlur={() => onSave(localQuota)}
-              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              className={`w-full px-4 py-2 rounded-xl text-xs font-bold border transition-all ${appConfig.theme === "light" ? "bg-slate-50 border-slate-200 text-slate-900 focus:bg-white" : "bg-black/40 border-white/10 text-white focus:bg-black/60"}`}
-              placeholder="data.remaining" />
-          </div>
-        </div>
-      )}
-      {/*
-        <div className="px-4 pb-4">
-          {liveError ? (
-            <div
-              className={`rounded-xl border px-3 py-2 text-[10px] leading-relaxed ${
-                liveStale
-                  ? appConfig.theme === "light"
-                    ? "bg-amber-50 border-amber-200 text-amber-900"
-                    : "bg-amber-500/10 border-amber-500/20 text-amber-300/90"
-                  : appConfig.theme === "light"
-                  ? "bg-red-50 border-red-200 text-red-800"
-                  : "bg-red-500/10 border-red-500/20 text-red-300/90"
-              }`}
-            >
-              {liveError}
-            </div>
-          ) : (
-            <div className="text-[9px] text-slate-500 font-medium">
-              Last update: {liveItem?.last_update || "—"}
-              {liveItem?.current_value != null && (
-                <span className="ml-2 opacity-80">
-                  · {liveItem.current_value}
-                  {liveItem.unit ? ` ${liveItem.unit}` : ""}
-                </span>
-              )}
-            </div>
-          )}
-        </div>
-      */}
     </Reorder.Item>
   );
 }
@@ -753,6 +938,7 @@ export function SettingsPanel({
   const pendingQuotaReorderRef = useRef<QuotaConfig | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const [openProviderId, setOpenProviderId] = useState<string | null>(null);
+  const [quotaItemSettingsId, setQuotaItemSettingsId] = useState<string | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "completed" | "error">("idle");
@@ -985,6 +1171,14 @@ export function SettingsPanel({
         };
         setLocalQuota(normalized);
         quotaInitialized.current = true;
+        const beforeIds = (quotaConfig?.items || []).map((item) => item.id).join(",");
+        const afterIds = (normalized.items || []).map((item) => item.id).join(",");
+        if (
+          beforeIds !== afterIds ||
+          quotaConfig?.preferred_provider_order_applied !== true
+        ) {
+          onSaveQuota(normalized);
+        }
       }
     }
   }, [quotaConfig]);
@@ -996,6 +1190,13 @@ export function SettingsPanel({
     document.addEventListener("click", handleClickOutside);
     return () => document.removeEventListener("click", handleClickOutside);
   }, [openProviderId]);
+
+  useEffect(() => {
+    if (!quotaItemSettingsId) return;
+    if (!(localQuota?.items || []).some((item) => item.id === quotaItemSettingsId)) {
+      setQuotaItemSettingsId(null);
+    }
+  }, [quotaItemSettingsId, localQuota]);
 
   const addServer = () => {
     const servers = localGpu?.servers || [];
@@ -1066,6 +1267,9 @@ export function SettingsPanel({
     const next = { ...localQuota, items: items.filter((item) => item.id !== id) };
     setLocalQuota(next);
     onSaveQuota(next);
+    if (quotaItemSettingsId === id) {
+      setQuotaItemSettingsId(null);
+    }
   };
 
   const updateQuotaItem = <K extends keyof QuotaItemConfig>(
@@ -1092,6 +1296,9 @@ export function SettingsPanel({
           json_path: "",
           max_quota: updatedItem.max_quota || 100,
           unit: updatedItem.unit || "%",
+          visualizations: providerSupportsQuotaVisualizations(val)
+            ? updatedItem.visualizations
+            : undefined,
         };
       }
     }
@@ -2423,6 +2630,23 @@ export function SettingsPanel({
   );
 
   const renderQuotaSection = () => {
+    const settingsItem = quotaItemSettingsId
+      ? (localQuota?.items || []).find((item) => item.id === quotaItemSettingsId)
+      : undefined;
+
+    if (settingsItem) {
+      return (
+        <QuotaItemSettingsPage
+          q={settingsItem}
+          appConfig={appConfig}
+          onBack={() => setQuotaItemSettingsId(null)}
+          onUpdateField={updateQuotaItem}
+          onSave={onSaveQuota}
+          localQuota={localQuota}
+        />
+      );
+    }
+
     return (
     <section className="space-y-6">
       <div className="flex items-center justify-between">
@@ -2441,7 +2665,6 @@ export function SettingsPanel({
         </button>
       </div>
       <div className="space-y-6">
-        {/* Show Account Name Toggle */}
         <div className={`p-4 border border-[var(--dashboard-border)] rounded-2xl flex items-center justify-between ${
           appConfig.theme === "light" ? "bg-white" : "bg-white/5"
         }`}>
@@ -2463,7 +2686,6 @@ export function SettingsPanel({
           />
         </div>
 
-        {/* Show Plan Type Toggle */}
         <div className={`p-4 border border-[var(--dashboard-border)] rounded-2xl flex items-center justify-between ${
           appConfig.theme === "light" ? "bg-white" : "bg-white/5"
         }`}>
@@ -2485,7 +2707,6 @@ export function SettingsPanel({
           />
         </div>
 
-        {/* Quota Items List */}
         <Reorder.Group
           axis="y"
           values={localQuota?.items || []}
@@ -2505,9 +2726,8 @@ export function SettingsPanel({
               onToggleProvider={setOpenProviderId}
               onRemove={removeQuotaItem}
               onUpdateField={updateQuotaItem}
-              onSave={onSaveQuota}
               onReorderCommit={commitQuotaReorder}
-              localQuota={localQuota}
+              onOpenSettings={setQuotaItemSettingsId}
             />
           ))}
         </Reorder.Group>
@@ -2772,7 +2992,10 @@ export function SettingsPanel({
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveSection(tab.id)}
+              onClick={() => {
+                setQuotaItemSettingsId(null);
+                setActiveSection(tab.id);
+              }}
               className={`flex items-center gap-3 px-4 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all relative whitespace-nowrap text-left w-full ${
                 isActive
                   ? appConfig.theme === "light"

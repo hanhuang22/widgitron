@@ -258,21 +258,21 @@ impl Default for AppConfig {
             sidebar_monitor_x: None,
             sidebar_monitor_y: None,
             sidebar_theme: Some(SidebarThemeConfig {
-                preset: Some("midnight".into()),
-                active_theme_id: Some("midnight".into()),
+                preset: Some("light".into()),
+                active_theme_id: Some("light".into()),
                 themes: Some(Vec::new()),
-                background: Some("#050814".into()),
-                header: Some("#080d1d".into()),
-                quota: Some("#06b6d4".into()),
-                gpu: Some("#3b82f6".into()),
-                deadlines: Some("#f59e0b".into()),
-                arxiv: Some("#ec4899".into()),
-                background_opacity: Some(0.98),
-                header_opacity: Some(0.98),
-                card_opacity: Some(0.96),
-                blur: Some(0.0),
+                background: Some("#ffffff".into()),
+                header: Some("#ffffff".into()),
+                quota: Some("#0891b2".into()),
+                gpu: Some("#2563eb".into()),
+                deadlines: Some("#7c3aed".into()),
+                arxiv: Some("#db2777".into()),
+                background_opacity: Some(0.84),
+                header_opacity: Some(0.9),
+                card_opacity: Some(0.76),
+                blur: Some(18.0),
             }),
-            sidebar_width: Some(480.0),
+            sidebar_width: Some(320.0),
             sidebar_length: None,
             sidebar_widgets: Some(sidebar_widgets),
             sidebar_layout: Some(sidebar_layout),
@@ -288,6 +288,146 @@ impl Default for AppConfig {
             sidebar_hide_sensitivity: Some(crate::sidebar_dock::DEFAULT_HIDE_SENSITIVITY),
             active_widgets: Some(HashMap::new()),
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaDailyPoint {
+    pub date: String,
+    pub value: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaModelBreakdown {
+    pub model: String,
+    pub value: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_total: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaSpendSummary {
+    pub spent_cents: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_cents: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub included_cents: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bonus_cents: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remaining_cents: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_cycle_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_cycle_end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_cycle_progress_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaTokenSummary {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_count: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaAnalytics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend: Option<QuotaSpendSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_activity: Vec<QuotaDailyPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_queries: Vec<QuotaDailyPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub daily_tokens: Vec<QuotaDailyPoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_breakdown: Vec<QuotaModelBreakdown>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<QuotaTokenSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_cost_cents: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct QuotaVisualizationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend_summary: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calendar_heatmap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_bars: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_breakdown: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_summary: Option<bool>,
+    /// @deprecated Prefer `heatmap_metric` / `bars_metric`. Kept for older configs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily_metric: Option<String>,
+    /// `queries` (default) or `tokens` for calendar heatmap
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heatmap_metric: Option<String>,
+    /// `queries` (default) or `tokens` for daily bars
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bars_metric: Option<String>,
+    /// `spend` (default) or `tokens` for spend summary card
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend_metric: Option<String>,
+    /// `spend` (default) or `tokens` for model breakdown
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_metric: Option<String>,
+}
+
+impl QuotaVisualizationConfig {
+    fn metric_is_tokens(primary: Option<&str>, legacy: Option<&str>) -> bool {
+        primary
+            .or(legacy)
+            .is_some_and(|m| m.eq_ignore_ascii_case("tokens"))
+    }
+
+    pub fn heatmap_metric_is_tokens(&self) -> bool {
+        Self::metric_is_tokens(self.heatmap_metric.as_deref(), self.daily_metric.as_deref())
+    }
+
+    pub fn bars_metric_is_tokens(&self) -> bool {
+        Self::metric_is_tokens(self.bars_metric.as_deref(), self.daily_metric.as_deref())
+    }
+
+    pub fn spend_metric_is_tokens(&self) -> bool {
+        self.spend_metric
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("tokens"))
+    }
+
+    pub fn model_metric_is_tokens(&self) -> bool {
+        self.model_metric
+            .as_deref()
+            .is_some_and(|m| m.eq_ignore_ascii_case("tokens"))
+    }
+
+    pub fn any_enabled(&self) -> bool {
+        self.calendar_heatmap.unwrap_or(false)
+            || self.daily_bars.unwrap_or(false)
+            || self.model_breakdown.unwrap_or(false)
     }
 }
 
@@ -341,6 +481,10 @@ pub struct QuotaItem {
     pub bars: Option<Vec<QuotaBar>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analytics: Option<QuotaAnalytics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visualizations: Option<QuotaVisualizationConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -351,6 +495,11 @@ pub struct QuotaConfig {
     pub show_account_name: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_plan_type: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visualizations: Option<QuotaVisualizationConfig>,
+    /// One-time migration: Codex / Claude Code / Cursor pinned to top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_provider_order_applied: Option<bool>,
 }
 
 impl Default for QuotaConfig {
@@ -360,6 +509,8 @@ impl Default for QuotaConfig {
             update_interval: Some(300),
             show_account_name: Some(false),
             show_plan_type: Some(true),
+            visualizations: None,
+            preferred_provider_order_applied: None,
         }
     }
 }

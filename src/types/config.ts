@@ -111,6 +111,7 @@ export interface QuotaItemConfig {
   unit?: string;
   account_label?: string;
   plan_type?: string;
+  visualizations?: QuotaVisualizationConfig;
 }
 
 export interface QuotaConfig {
@@ -118,6 +119,74 @@ export interface QuotaConfig {
   update_interval?: number;
   show_account_name?: boolean;
   show_plan_type?: boolean;
+  visualizations?: QuotaVisualizationConfig;
+  /** One-time migration: Codex / Claude Code / Cursor pinned to top. */
+  preferred_provider_order_applied?: boolean;
+}
+
+export interface QuotaVisualizationConfig {
+  spend_summary?: boolean;
+  calendar_heatmap?: boolean;
+  daily_bars?: boolean;
+  model_breakdown?: boolean;
+  token_summary?: boolean;
+  /** @deprecated Prefer `heatmap_metric` / `bars_metric`. Kept for older configs. */
+  daily_metric?: "queries" | "tokens";
+  /** `queries` (default) or `tokens` for calendar heatmap */
+  heatmap_metric?: "queries" | "tokens";
+  /** `queries` (default) or `tokens` for daily bars */
+  bars_metric?: "queries" | "tokens";
+  /** `spend` (default) or `tokens` for spend summary card */
+  spend_metric?: "spend" | "tokens";
+  /** `spend` (default) or `tokens` for model breakdown */
+  model_metric?: "spend" | "tokens";
+}
+
+export interface QuotaDailyPoint {
+  date: string;
+  value: number;
+  label?: string | null;
+}
+
+export interface QuotaModelBreakdown {
+  model: string;
+  value: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  token_total?: number | null;
+}
+
+export interface QuotaSpendSummary {
+  spent_cents: number;
+  limit_cents?: number | null;
+  included_cents?: number | null;
+  bonus_cents?: number | null;
+  remaining_cents?: number | null;
+  billing_cycle_start?: string | null;
+  billing_cycle_end?: string | null;
+  billing_cycle_progress_pct?: number | null;
+  currency?: string | null;
+}
+
+export interface QuotaTokenSummary {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  total_tokens?: number | null;
+  session_count?: number | null;
+  request_count?: number | null;
+}
+
+export interface QuotaAnalytics {
+  spend?: QuotaSpendSummary | null;
+  daily_activity?: QuotaDailyPoint[];
+  daily_queries?: QuotaDailyPoint[];
+  daily_tokens?: QuotaDailyPoint[];
+  model_breakdown?: QuotaModelBreakdown[];
+  tokens?: QuotaTokenSummary | null;
+  total_cost_cents?: number | null;
 }
 
 export interface PaperConfig {
@@ -239,4 +308,6 @@ export interface QuotaItem {
   tertiary_reset?: string | null;
   bars?: QuotaBar[] | null;
   plan_type?: string | null;
+  analytics?: QuotaAnalytics | null;
+  visualizations?: QuotaVisualizationConfig | null;
 }

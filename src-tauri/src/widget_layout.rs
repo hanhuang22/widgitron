@@ -15,10 +15,23 @@ const SAVE_DEBOUNCE_MS: u64 = 300;
 // Applying a saved layout and changing a widget's parent both emit native
 // move/resize events. Keep those events out of the user-layout debounce so a
 // transient DPI-adjusted size cannot overwrite the normalized layout.
-const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 900;
+// Must cover the longest first-run desktop-lock stagger in the frontend
+// (quota at 1900ms) plus SetParent/DPI settle time.
+const PROGRAMMATIC_LAYOUT_SETTLE_MS: u64 = 2500;
 const MONITOR_POLL_INTERVAL_MS: u64 = 2000;
 const MIN_WIDGET_WIDTH: u32 = 220;
 const MIN_WIDGET_HEIGHT: u32 = 180;
+
+// First-run target sizes in logical CSS pixels (before OS DPI / UI scale).
+const DEFAULT_TARGET_WIDTH_LOGICAL: f64 = 400.0;
+const DEFAULT_TARGET_HEIGHT_TALL_LOGICAL: f64 = 460.0;
+const DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL: f64 = 340.0;
+const DEFAULT_MARGIN_X_FRAC: f64 = 0.018;
+const DEFAULT_MARGIN_Y_FRAC: f64 = 0.028;
+const DEFAULT_COLUMN_GAP_FRAC: f64 = 0.014;
+const DEFAULT_ROW_GAP_FRAC: f64 = 0.018;
+const DEFAULT_RIGHT_MARGIN_FRAC: f64 = 0.02;
+const DEFAULT_BOTTOM_MARGIN_FRAC: f64 = 0.02;
 
 pub const TRACKED_WIDGET_IDS: [&str; 4] = [
     "widget-gpu-default",
@@ -324,17 +337,24 @@ fn ensure_widget_layout_for_window_at_scale(
         .copied();
     let layout = source_layout
         .or(target_layout)
-        .or_else(|| default_layout_for_widget(label))
+        .or_else(|| default_layout_for_widget_on_monitor(label, &target_monitor, scale))
         .ok_or_else(|| format!("No default widget layout for {}", label))?;
 
     ui_scale::apply_to_window(win, scale)?;
     apply_layout_to_window(win, &target_monitor, layout, scale)?;
 
+    // Persist the post-clamp geometry so stored fractions match what is on screen
+    // (UI scale / min-size clamps can otherwise drift from the ideal default).
+    let (applied_position, applied_size) =
+        normalized_to_physical(layout, &target_monitor, scale);
+    let applied_layout =
+        physical_to_normalized(applied_position, applied_size, &target_monitor, scale);
+
     store
         .monitors
         .entry(target_key.clone())
         .or_default()
-        .insert(label.to_string(), layout);
+        .insert(label.to_string(), applied_layout);
     store
         .active_monitor_by_widget
         .insert(label.to_string(), target_key.clone());
@@ -450,47 +470,73 @@ fn apply_layout_to_window(
     Ok(())
 }
 
-fn default_layout_for_widget(label: &str) -> Option<NormalizedWidgetLayout> {
-    // First-run desktop layout: a left-aligned four-panel grid. It matches
-    // the visual default (GPU / Arxiv above Quota / Deadlines) while leaving
-    // the right side of the desktop free for normal work.
-    let left = 0.018;
-    let top = 0.028;
-    let column_gap = 0.014;
-    let row_gap = 0.018;
-    let cell_width = 0.350;
-    let cell_height = 0.450;
+fn default_layout_for_widget_on_monitor(
+    label: &str,
+    monitor: &Monitor,
+    scale: f64,
+) -> Option<NormalizedWidgetLayout> {
+    default_layout_for_widget(label, monitor_work_area(monitor), monitor.scale_factor(), scale)
+}
 
-    let right = left + cell_width + column_gap;
-    let bottom = top + cell_height + row_gap;
+/// First-run desktop layout: left-aligned 2×2 grid sized from logical pixel
+/// targets, capped so UI scale cannot push the four panels outside the work area.
+fn default_layout_for_widget(
+    label: &str,
+    area: MonitorWorkArea,
+    dpi: f64,
+    scale: f64,
+) -> Option<NormalizedWidgetLayout> {
+    let dpi = if dpi.is_finite() && dpi > 0.0 {
+        dpi
+    } else {
+        1.0
+    };
+    let scale = ui_scale::sanitize(Some(scale));
+    let area_w = area.width.max(1) as f64;
+    let area_h = area.height.max(1) as f64;
 
-    match label {
-        "widget-gpu-default" => Some(NormalizedWidgetLayout {
-            x: left,
-            y: top,
-            width: cell_width,
-            height: cell_height,
-        }),
-        "widget-arxiv-default" => Some(NormalizedWidgetLayout {
-            x: right,
-            y: top,
-            width: cell_width,
-            height: cell_height,
-        }),
-        "widget-quota-default" => Some(NormalizedWidgetLayout {
-            x: left,
-            y: bottom,
-            width: cell_width,
-            height: cell_height,
-        }),
-        "widget-deadlines-default" => Some(NormalizedWidgetLayout {
-            x: right,
-            y: bottom,
-            width: cell_width,
-            height: cell_height,
-        }),
-        _ => None,
+    let left = DEFAULT_MARGIN_X_FRAC * area_w;
+    let top = DEFAULT_MARGIN_Y_FRAC * area_h;
+    let column_gap = DEFAULT_COLUMN_GAP_FRAC * area_w;
+    let row_gap = DEFAULT_ROW_GAP_FRAC * area_h;
+    let right_margin = DEFAULT_RIGHT_MARGIN_FRAC * area_w;
+    let bottom_margin = DEFAULT_BOTTOM_MARGIN_FRAC * area_h;
+
+    let min_w = (MIN_WIDGET_WIDTH as f64 * scale).max(1.0);
+    let min_h = (MIN_WIDGET_HEIGHT as f64 * scale).max(1.0);
+
+    let max_cell_w = ((area_w - left - right_margin - column_gap) / 2.0).max(min_w);
+    let available_h = (area_h - top - bottom_margin - row_gap).max(min_h * 2.0);
+
+    let want_w = (DEFAULT_TARGET_WIDTH_LOGICAL * dpi * scale).min(max_cell_w).max(min_w);
+    let mut tall_h = DEFAULT_TARGET_HEIGHT_TALL_LOGICAL * dpi * scale;
+    let mut short_h = DEFAULT_TARGET_HEIGHT_SHORT_LOGICAL * dpi * scale;
+    let row_total = tall_h + short_h;
+    if row_total > available_h && row_total > 0.0 {
+        let fit = available_h / row_total;
+        tall_h *= fit;
+        short_h *= fit;
     }
+    tall_h = tall_h.clamp(min_h, available_h);
+    short_h = short_h.clamp(min_h, (available_h - tall_h).max(min_h));
+
+    let right = left + want_w + column_gap;
+    let bottom = top + tall_h + row_gap;
+
+    let (x, y, height) = match label {
+        "widget-gpu-default" => (left, top, tall_h),
+        "widget-arxiv-default" => (right, top, tall_h),
+        "widget-quota-default" => (left, bottom, short_h),
+        "widget-deadlines-default" => (right, bottom, short_h),
+        _ => return None,
+    };
+
+    Some(sanitize_layout(NormalizedWidgetLayout {
+        x: x / area_w,
+        y: y / area_h,
+        width: want_w / scale / area_w,
+        height: height / scale / area_h,
+    }))
 }
 
 fn physical_to_normalized(
@@ -517,7 +563,14 @@ fn normalized_to_physical(
     monitor: &Monitor,
     scale: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    let area = monitor_work_area(monitor);
+    normalized_to_physical_in_area(layout, monitor_work_area(monitor), scale)
+}
+
+fn normalized_to_physical_in_area(
+    layout: NormalizedWidgetLayout,
+    area: MonitorWorkArea,
+    scale: f64,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
     let layout = sanitize_layout(layout);
     let scale = ui_scale::sanitize(Some(scale));
     let min_width = ((MIN_WIDGET_WIDTH as f64 * scale).round() as u32).max(1);
@@ -681,12 +734,43 @@ fn write_layout_store(app: &AppHandle, store: &WidgetLayoutStore) -> Result<(), 
 mod tests {
     use super::*;
 
+    fn sample_area(width: u32, height: u32) -> MonitorWorkArea {
+        MonitorWorkArea {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }
+    }
+
+    fn layouts_for(area: MonitorWorkArea, dpi: f64, scale: f64) -> [NormalizedWidgetLayout; 4] {
+        [
+            default_layout_for_widget("widget-gpu-default", area, dpi, scale).unwrap(),
+            default_layout_for_widget("widget-arxiv-default", area, dpi, scale).unwrap(),
+            default_layout_for_widget("widget-quota-default", area, dpi, scale).unwrap(),
+            default_layout_for_widget("widget-deadlines-default", area, dpi, scale).unwrap(),
+        ]
+    }
+
+    fn physical_rect(
+        layout: NormalizedWidgetLayout,
+        area: MonitorWorkArea,
+        scale: f64,
+    ) -> (i32, i32, u32, u32) {
+        let (pos, size) = normalized_to_physical_in_area(layout, area, scale);
+        (pos.x, pos.y, size.width, size.height)
+    }
+
+    fn rects_overlap(a: (i32, i32, u32, u32), b: (i32, i32, u32, u32)) -> bool {
+        let (ax, ay, aw, ah) = a;
+        let (bx, by, bw, bh) = b;
+        ax < bx + bw as i32 && bx < ax + aw as i32 && ay < by + bh as i32 && by < ay + ah as i32
+    }
+
     #[test]
     fn default_layout_is_a_left_aligned_two_by_two_grid() {
-        let gpu = default_layout_for_widget("widget-gpu-default").unwrap();
-        let arxiv = default_layout_for_widget("widget-arxiv-default").unwrap();
-        let quota = default_layout_for_widget("widget-quota-default").unwrap();
-        let deadlines = default_layout_for_widget("widget-deadlines-default").unwrap();
+        let area = sample_area(1920, 1040);
+        let [gpu, arxiv, quota, deadlines] = layouts_for(area, 1.0, 1.0);
 
         assert_eq!(gpu.x, quota.x);
         assert_eq!(arxiv.x, deadlines.x);
@@ -695,9 +779,84 @@ mod tests {
         assert_eq!(quota.y, deadlines.y);
         assert!(gpu.y < quota.y);
 
-        for layout in [gpu, arxiv, quota, deadlines] {
-            assert_eq!(layout.width, gpu.width);
-            assert_eq!(layout.height, gpu.height);
+        assert_eq!(gpu.width, arxiv.width);
+        assert_eq!(quota.width, deadlines.width);
+        assert_eq!(gpu.width, quota.width);
+        assert_eq!(gpu.height, arxiv.height);
+        assert_eq!(quota.height, deadlines.height);
+        assert!(gpu.height > quota.height);
+    }
+
+    #[test]
+    fn default_layout_at_elevated_ui_scale_does_not_overlap() {
+        let area = sample_area(1920, 1040);
+        let scale = 1.5;
+        let layouts = layouts_for(area, 1.0, scale);
+        let rects: Vec<_> = layouts
+            .iter()
+            .map(|layout| physical_rect(*layout, area, scale))
+            .collect();
+
+        for rect in &rects {
+            let (x, y, w, h) = *rect;
+            assert!(x >= area.x);
+            assert!(y >= area.y);
+            assert!(x + w as i32 <= area.x + area.width as i32);
+            assert!(y + h as i32 <= area.y + area.height as i32);
         }
+
+        for i in 0..rects.len() {
+            for j in (i + 1)..rects.len() {
+                assert!(
+                    !rects_overlap(rects[i], rects[j]),
+                    "widgets {i} and {j} overlap at scale {scale}: {:?} vs {:?}",
+                    rects[i],
+                    rects[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn default_layout_shrinks_to_fit_small_work_areas() {
+        let area = sample_area(1280, 720);
+        let scale = 1.25;
+        let layouts = layouts_for(area, 1.0, scale);
+        let rects: Vec<_> = layouts
+            .iter()
+            .map(|layout| physical_rect(*layout, area, scale))
+            .collect();
+
+        for rect in &rects {
+            let (x, y, w, h) = *rect;
+            assert!(x + w as i32 <= area.x + area.width as i32);
+            assert!(y + h as i32 <= area.y + area.height as i32);
+            assert!(w >= ((MIN_WIDGET_WIDTH as f64 * scale).round() as u32).min(area.width));
+            assert!(h >= ((MIN_WIDGET_HEIGHT as f64 * scale).round() as u32).min(area.height));
+        }
+
+        for i in 0..rects.len() {
+            for j in (i + 1)..rects.len() {
+                assert!(!rects_overlap(rects[i], rects[j]));
+            }
+        }
+    }
+
+    #[test]
+    fn default_layout_targets_grow_with_ui_scale_when_space_allows() {
+        let area = sample_area(2560, 1440);
+        let at_1 = physical_rect(
+            default_layout_for_widget("widget-gpu-default", area, 1.0, 1.0).unwrap(),
+            area,
+            1.0,
+        );
+        let at_125 = physical_rect(
+            default_layout_for_widget("widget-gpu-default", area, 1.0, 1.25).unwrap(),
+            area,
+            1.25,
+        );
+
+        assert!(at_125.2 > at_1.2);
+        assert!(at_125.3 > at_1.3);
     }
 }

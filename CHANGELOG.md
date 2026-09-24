@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6] - 2026-09-24
+
+### Highlights
+- **Quota analytics**: Cursor and Claude usage charts — calendar heatmap, daily bars, model breakdown, and spend / token summaries.
+- **Per-monitor visuals**: Toggle heatmap, bars, and model charts per quota monitor in Settings.
+- **Light sidebar default**: Default sidebar theme is light glass, with a narrower starting width.
+
 ## [0.2.5] - 2026-07-15
 
 ### Highlights

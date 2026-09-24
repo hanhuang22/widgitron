@@ -12,7 +12,14 @@ use crate::{config_store, secrets};
 
 const REMOVED_QUOTA_PROVIDERS: &[&str] = &["minimax-cn", "openai-compatible"];
 const QUOTA_SAVE_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
+const CLAUDE_OAUTH_DEFAULT_COOLDOWN_SECS: u64 = 300;
+const CLAUDE_OAUTH_MIN_COOLDOWN_SECS: u64 = 60;
+const CLAUDE_OAUTH_MAX_COOLDOWN_SECS: u64 = 900;
 static QUOTA_SAVE_REFRESH_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Unix timestamp (secs) until which Claude OAuth usage fetches should be skipped.
+static CLAUDE_OAUTH_COOLDOWN_UNTIL: AtomicU64 = AtomicU64::new(0);
+static CLAUDE_OAUTH_FETCH_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
 
 #[derive(serde::Serialize, Clone)]
 pub struct QuotaMonitorStatus {
@@ -40,19 +47,78 @@ fn strip_removed_quota_providers(config: &mut QuotaConfig) -> usize {
 
 pub fn sanitize_quota_config(mut config: QuotaConfig) -> QuotaConfig {
     let _ = strip_removed_quota_providers(&mut config);
+    let _ = migrate_quota_visualizations(&mut config);
+    let _ = sort_quota_items_by_preferred_order(&mut config);
     config
+}
+
+fn provider_supports_visualizations(provider: &str) -> bool {
+    matches!(provider, "cursor" | "claude-code")
+}
+
+fn preferred_quota_provider_rank(provider: &str) -> usize {
+    match provider {
+        "codex" => 0,
+        "claude-code" => 1,
+        "cursor" => 2,
+        _ => 100,
+    }
+}
+
+/// Keep Codex / Claude Code / Cursor at the top of the monitor list (one-time).
+fn sort_quota_items_by_preferred_order(config: &mut QuotaConfig) -> bool {
+    if config.preferred_provider_order_applied == Some(true) {
+        return false;
+    }
+    let before: Vec<String> = config.items.iter().map(|item| item.id.clone()).collect();
+    config.items = {
+        let mut indexed: Vec<(usize, QuotaItem)> = config
+            .items
+            .drain(..)
+            .enumerate()
+            .collect();
+        indexed.sort_by(|(ia, a), (ib, b)| {
+            preferred_quota_provider_rank(&a.provider)
+                .cmp(&preferred_quota_provider_rank(&b.provider))
+                .then_with(|| ia.cmp(ib))
+        });
+        indexed.into_iter().map(|(_, item)| item).collect()
+    };
+    config.preferred_provider_order_applied = Some(true);
+    let after: Vec<String> = config.items.iter().map(|item| item.id.clone()).collect();
+    before != after
+}
+
+/// Move legacy top-level visualization settings onto each Cursor / Claude item.
+fn migrate_quota_visualizations(config: &mut QuotaConfig) -> bool {
+    let Some(global) = config.visualizations.take() else {
+        return false;
+    };
+    for item in &mut config.items {
+        if item.visualizations.is_some() {
+            continue;
+        }
+        if provider_supports_visualizations(&item.provider) {
+            item.visualizations = Some(global.clone());
+        }
+    }
+    true
 }
 
 pub fn read_quota_config(app: &AppHandle) -> QuotaConfig {
     let mut config = config_store::read_config::<QuotaConfig>(app, "quota_config.json");
     decrypt_quota_config_secrets(&mut config);
     let removed = strip_removed_quota_providers(&mut config);
-    if removed > 0 {
-        log::info!(
-            "Removed {} deprecated quota provider entr{} from quota_config.json",
-            removed,
-            if removed == 1 { "y" } else { "ies" }
-        );
+    let migrated = migrate_quota_visualizations(&mut config);
+    let reordered = sort_quota_items_by_preferred_order(&mut config);
+    if removed > 0 || migrated || reordered {
+        if removed > 0 {
+            log::info!(
+                "Removed {} deprecated quota provider entr{} from quota_config.json",
+                removed,
+                if removed == 1 { "y" } else { "ies" }
+            );
+        }
         if let Err(err) = write_quota_config(app, &config) {
             log::warn!("Failed to persist sanitized quota_config.json: {}", err);
         }
@@ -339,6 +405,7 @@ fn remap_fetched_to_config_item(fetched: &QuotaItem, config_item: &QuotaItem) ->
         item.name = config_item.name.clone();
     }
     item.auth_mode = config_item.auth_mode.clone();
+    item.visualizations = config_item.visualizations.clone();
     item
 }
 
@@ -1100,7 +1167,6 @@ pub fn group_antigravity_bars(item: &mut QuotaItem) {
 }
 
 #[derive(serde::Deserialize)]
-#[allow(dead_code)]
 struct CursorPlanUsage {
     #[serde(rename = "totalSpend")]
     total_spend: Option<f64>,
@@ -1110,7 +1176,7 @@ struct CursorPlanUsage {
     bonus_spend: Option<f64>,
     limit: Option<f64>,
     #[serde(rename = "totalPercentUsed")]
-    total_percent_used: Option<f64>,
+    _total_percent_used: Option<f64>,
     #[serde(rename = "apiPercentUsed")]
     api_percent_used: Option<f64>,
     #[serde(rename = "autoPercentUsed")]
@@ -1118,12 +1184,13 @@ struct CursorPlanUsage {
 }
 
 #[derive(serde::Deserialize)]
-#[allow(dead_code)]
 struct CursorUsageResponse {
     #[serde(rename = "planUsage")]
     plan_usage: Option<CursorPlanUsage>,
     #[serde(rename = "billingCycleEnd")]
     billing_cycle_end: Option<String>,
+    #[serde(rename = "billingCycleStart")]
+    billing_cycle_start: Option<String>,
 }
 
 fn get_codex_auth_paths() -> Vec<PathBuf> {
@@ -1579,7 +1646,7 @@ fn read_cursor_local_credentials() -> Result<(String, Option<String>, Option<Str
     Ok((token, values.remove(EMAIL_KEY), values.remove(PLAN_KEY)))
 }
 
-async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, String> {
+async fn fetch_cursor_quota(_show_account_name: bool, config: &QuotaConfig) -> Result<QuotaItem, String> {
     let (token, account_label, plan_type) =
         tokio::task::spawn_blocking(read_cursor_local_credentials)
             .await
@@ -1633,7 +1700,9 @@ async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, Strin
     let remaining_api = (100.0 - api_used).max(0.0);
     let remaining_auto = (100.0 - auto_used).max(0.0);
 
-    let reset_time = usage_resp.billing_cycle_end.and_then(|s| {
+    let billing_cycle_end = usage_resp.billing_cycle_end.clone();
+
+    let reset_time = billing_cycle_end.as_ref().and_then(|s| {
         s.parse::<i64>().ok().and_then(|ms| {
             use chrono::TimeZone;
             if let Some(dt) = chrono::Local.timestamp_opt(ms / 1000, 0).single() {
@@ -1646,7 +1715,9 @@ async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, Strin
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
-    Ok(QuotaItem {
+    let viz = crate::quota_analytics::merged_visualizations_for_provider(config, "cursor");
+
+    let mut item = QuotaItem {
         id: "cursor".to_string(),
         name: "Cursor".to_string(),
         account_label,
@@ -1668,7 +1739,15 @@ async fn fetch_cursor_quota(_show_account_name: bool) -> Result<QuotaItem, Strin
         secondary_reset: None,
         plan_type,
         ..Default::default()
-    })
+    };
+
+    if crate::quota_analytics::visualizations_enabled(&viz) {
+        item.analytics = Some(
+            crate::quota_analytics::build_cursor_analytics(&token, &viz).await,
+        );
+    }
+
+    Ok(item)
 }
 
 /// Helper to traverse a serde_json::Value using dot-notation, including optional array index syntax (e.g. data.list[0].value)
@@ -2281,176 +2360,1162 @@ async fn fetch_pioneer_quota(item: &QuotaItem) -> Result<QuotaItem, String> {
     })
 }
 
-// ─── Claude Code ───────────────────────────────────────────────────────────
+// ─── Claude Code (official OAuth subscription quota only) ────────────────────
 
-fn get_claude_settings_path() -> Option<PathBuf> {
-    // On Windows, HOME is often unset; fall back to USERPROFILE
+fn claude_config_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(shellexpand::tilde(trimmed).to_string());
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(profile) = std::env::var("USERPROFILE") {
             if !profile.is_empty() {
-                return Some(PathBuf::from(profile).join(".claude").join("settings.json"));
+                return PathBuf::from(profile).join(".claude");
             }
         }
     }
-    let expanded = shellexpand::tilde("~/.claude/settings.json").to_string();
-    if expanded.starts_with('~') {
-        None
-    } else {
-        Some(PathBuf::from(expanded))
+
+    PathBuf::from(shellexpand::tilde("~/.claude").to_string())
+}
+
+fn read_json_file(path: &PathBuf) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn oauth_token_from_process_env() -> Option<String> {
+    std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn settings_env_blocks_oauth() -> bool {
+    let settings_path = claude_config_dir().join("settings.json");
+    let settings = read_json_file(&settings_path);
+    settings
+        .as_ref()
+        .and_then(|value| value.get("env"))
+        .and_then(|env| env.as_object())
+        .is_some_and(|env| {
+            env.contains_key("ANTHROPIC_AUTH_TOKEN")
+                || env.contains_key("ANTHROPIC_API_KEY")
+                || env.contains_key("ANTHROPIC_BASE_URL")
+        })
+}
+
+const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_TOKEN_URLS: &[&str] = &[
+    "https://platform.claude.com/v1/oauth/token",
+    "https://console.anthropic.com/v1/oauth/token",
+];
+const CLAUDE_OAUTH_REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
+
+#[derive(Debug, Clone)]
+enum ClaudeOAuthSource {
+    Keyring { service: String },
+    CredentialsFile,
+    Env,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeOAuthBundle {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_at_ms: Option<i64>,
+    source: ClaudeOAuthSource,
+    /// Full credentials JSON when available, used to persist refreshed tokens.
+    document: Option<serde_json::Value>,
+}
+
+impl ClaudeOAuthBundle {
+    fn is_expired(&self, skew_ms: i64) -> bool {
+        let Some(expires_at_ms) = self.expires_at_ms else {
+            return false;
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        expires_at_ms <= now_ms + skew_ms
+    }
+
+    fn needs_refresh(&self) -> bool {
+        self.refresh_token.as_ref().is_some_and(|t| !t.is_empty())
+            && self.expires_at_ms.is_some()
+            && self.is_expired(CLAUDE_OAUTH_REFRESH_SKEW_MS)
     }
 }
 
-/// Fetch Claude Code remaining token quota.
-/// If the ANTHROPIC_AUTH_TOKEN starts with "sk-cp-" we query
-/// https://api.minimaxi.com/v1/token_plan/remains for the balance.
-/// Otherwise we return an error because standard Anthropic tokens have no public
-/// balance API.
-async fn fetch_claude_code_quota(item: &QuotaItem) -> Result<QuotaItem, String> {
-    let mode = quota_auth_mode(item);
-    let token = if mode == QuotaAuthMode::ApiKey {
-        let key = item.api_key.trim();
-        if key.is_empty() {
+fn oauth_from_credentials(credentials: &serde_json::Value) -> Option<ClaudeOAuthBundle> {
+    let oauth = credentials.get("claudeAiOauth")?;
+    let access_token = oauth
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    let refresh_token = oauth
+        .get("refreshToken")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let expires_at_ms = oauth.get("expiresAt").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_u64().map(|n| n as i64))
+            .or_else(|| v.as_str()?.trim().parse::<i64>().ok())
+    });
+    Some(ClaudeOAuthBundle {
+        access_token,
+        refresh_token,
+        expires_at_ms,
+        source: ClaudeOAuthSource::CredentialsFile,
+        document: Some(credentials.clone()),
+    })
+}
+
+fn parse_claude_secure_storage_bundle(raw: &str) -> Option<ClaudeOAuthBundle> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return oauth_from_credentials(&value);
+    }
+
+    if trimmed.starts_with("sk-ant-oat") || trimmed.starts_with("sk-ant-ort") {
+        return Some(ClaudeOAuthBundle {
+            access_token: trimmed.to_string(),
+            refresh_token: None,
+            expires_at_ms: None,
+            source: ClaudeOAuthSource::Env,
+            document: None,
+        });
+    }
+
+    None
+}
+
+fn claude_keyring_service_names(config_dir: &PathBuf) -> Vec<String> {
+    let mut names = Vec::new();
+    let custom_config = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if custom_config.is_none() {
+        names.push("Claude Code-credentials".to_string());
+    }
+
+    let dir_key = custom_config
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| config_dir.to_string_lossy().to_string());
+
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(dir_key.as_bytes());
+    let hash = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    names.push(format!("Claude Code-credentials-{}", &hash[..8]));
+
+    let expanded = shellexpand::tilde(&dir_key).to_string();
+    if expanded != dir_key {
+        let digest2 = Sha256::digest(expanded.as_bytes());
+        let hash2 = digest2.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        names.push(format!("Claude Code-credentials-{}", &hash2[..8]));
+    }
+
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn claude_keyring_username() -> String {
+    for key in ["USERNAME", "USER"] {
+        if let Ok(user) = std::env::var(key) {
+            let trimmed = user.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "claude".to_string()
+}
+
+fn read_claude_oauth_bundle_from_keyring() -> Option<ClaudeOAuthBundle> {
+    let config_dir = claude_config_dir();
+    let username = claude_keyring_username();
+
+    for service in claude_keyring_service_names(&config_dir) {
+        let entry = match keyring::Entry::new(&service, &username) {
+            Ok(entry) => entry,
+            Err(err) => {
+                log::debug!("Claude keyring entry unavailable for {}: {}", service, err);
+                continue;
+            }
+        };
+
+        let raw = match entry.get_password() {
+            Ok(raw) => raw,
+            Err(keyring::Error::NoEntry) => continue,
+            Err(err) => {
+                log::debug!("Claude keyring read failed for {}: {}", service, err);
+                continue;
+            }
+        };
+
+        if let Some(mut bundle) = parse_claude_secure_storage_bundle(&raw) {
+            bundle.source = ClaudeOAuthSource::Keyring {
+                service: service.clone(),
+            };
+            log::info!(
+                "Loaded Claude OAuth credentials from Windows Credential Manager ({})",
+                service
+            );
+            return Some(bundle);
+        }
+    }
+
+    None
+}
+
+fn read_claude_oauth_bundle_from_credentials_file() -> Option<ClaudeOAuthBundle> {
+    let credentials_path = claude_config_dir().join(".credentials.json");
+    let credentials = read_json_file(&credentials_path)?;
+    let mut bundle = oauth_from_credentials(&credentials)?;
+    bundle.source = ClaudeOAuthSource::CredentialsFile;
+    bundle.document = Some(credentials);
+    log::info!(
+        "Loaded Claude OAuth credentials from {}",
+        credentials_path.display()
+    );
+    Some(bundle)
+}
+
+fn load_claude_oauth_bundle() -> Option<ClaudeOAuthBundle> {
+    read_claude_oauth_bundle_from_keyring()
+        .or_else(read_claude_oauth_bundle_from_credentials_file)
+        .or_else(|| {
+            oauth_token_from_process_env().map(|access_token| ClaudeOAuthBundle {
+                access_token,
+                refresh_token: None,
+                expires_at_ms: None,
+                source: ClaudeOAuthSource::Env,
+                document: None,
+            })
+        })
+}
+
+fn apply_refreshed_tokens_to_document(
+    document: &mut serde_json::Value,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at_ms: i64,
+) {
+    let oauth = if let Some(obj) = document.as_object_mut() {
+        obj.entry("claudeAiOauth")
+            .or_insert_with(|| serde_json::json!({}))
+    } else {
+        return;
+    };
+    if let Some(oauth_obj) = oauth.as_object_mut() {
+        oauth_obj.insert(
+            "accessToken".to_string(),
+            serde_json::Value::String(access_token.to_string()),
+        );
+        if let Some(refresh_token) = refresh_token {
+            oauth_obj.insert(
+                "refreshToken".to_string(),
+                serde_json::Value::String(refresh_token.to_string()),
+            );
+        }
+        oauth_obj.insert(
+            "expiresAt".to_string(),
+            serde_json::Value::Number(expires_at_ms.into()),
+        );
+    }
+}
+
+fn persist_claude_oauth_bundle(bundle: &ClaudeOAuthBundle) -> Result<(), String> {
+    let Some(mut document) = bundle.document.clone() else {
+        return Ok(());
+    };
+    apply_refreshed_tokens_to_document(
+        &mut document,
+        &bundle.access_token,
+        bundle.refresh_token.as_deref(),
+        bundle.expires_at_ms.unwrap_or(0),
+    );
+    let serialized = serde_json::to_string_pretty(&document)
+        .map_err(|e| format!("Failed to serialize refreshed Claude OAuth credentials: {}", e))?;
+
+    match &bundle.source {
+        ClaudeOAuthSource::CredentialsFile => {
+            let path = claude_config_dir().join(".credentials.json");
+            std::fs::write(&path, serialized).map_err(|e| {
+                format!(
+                    "Failed to write refreshed Claude OAuth credentials to {}: {}",
+                    path.display(),
+                    e
+                )
+            })?;
+            log::info!("Persisted refreshed Claude OAuth credentials to {}", path.display());
+        }
+        ClaudeOAuthSource::Keyring { service } => {
+            let username = claude_keyring_username();
+            let entry = keyring::Entry::new(service, &username).map_err(|e| {
+                format!("Failed to open Claude keyring entry {}: {}", service, e)
+            })?;
+            entry.set_password(&serialized).map_err(|e| {
+                format!(
+                    "Failed to write refreshed Claude OAuth credentials to keyring {}: {}",
+                    service, e
+                )
+            })?;
+            log::info!(
+                "Persisted refreshed Claude OAuth credentials to keyring ({})",
+                service
+            );
+            // Keep the on-disk file in sync when present.
+            let path = claude_config_dir().join(".credentials.json");
+            if path.exists() {
+                let _ = std::fs::write(&path, &serialized);
+            }
+        }
+        ClaudeOAuthSource::Env => {}
+    }
+    Ok(())
+}
+
+async fn refresh_claude_oauth_bundle(bundle: &mut ClaudeOAuthBundle) -> Result<(), String> {
+    let refresh_token = bundle
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            "Claude OAuth access token expired and no refresh token is available. Run `claude auth login`."
+                .to_string()
+        })?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": CLAUDE_OAUTH_CLIENT_ID,
+    });
+
+    let mut last_err = "Claude OAuth token refresh failed".to_string();
+    let mut rate_limited = false;
+    for url in CLAUDE_OAUTH_TOKEN_URLS {
+        let res = match client
+            .post(*url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .header("User-Agent", "claude-code/2.1.79")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(res) => res,
+            Err(e) => {
+                last_err = format!("Network error refreshing Claude OAuth token via {}: {}", url, e);
+                log::warn!("{}", last_err);
+                continue;
+            }
+        };
+
+        let status = res.status();
+        let retry_after = parse_retry_after_secs(res.headers().get(reqwest::header::RETRY_AFTER));
+        let text = res.text().await.unwrap_or_else(|_| String::new());
+        if !status.is_success() {
+            last_err = format!(
+                "Claude OAuth token refresh failed via {} (HTTP {}): {}",
+                url,
+                status,
+                &text[..text.len().min(180)]
+            );
+            log::warn!("{}", last_err);
+            if status.as_u16() == 429 {
+                rate_limited = true;
+                let wait = retry_after.unwrap_or(CLAUDE_OAUTH_DEFAULT_COOLDOWN_SECS);
+                arm_claude_oauth_cooldown(wait);
+                break;
+            }
+            if status.as_u16() == 400 || status.as_u16() == 401 {
+                break;
+            }
+            continue;
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            format!("Failed to parse Claude OAuth refresh response: {}", e)
+        })?;
+        let access_token = parsed
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "Claude OAuth refresh response missing access_token".to_string())?;
+        let new_refresh = parsed
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| bundle.refresh_token.clone());
+        let expires_in = parsed
+            .get("expires_in")
+            .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|n| n as i64)))
+            .unwrap_or(8 * 60 * 60);
+        let expires_at_ms = chrono::Utc::now().timestamp_millis() + expires_in.saturating_mul(1000);
+
+        bundle.access_token = access_token;
+        bundle.refresh_token = new_refresh;
+        bundle.expires_at_ms = Some(expires_at_ms);
+        if let Err(err) = persist_claude_oauth_bundle(bundle) {
+            log::warn!("{}", err);
+        }
+        clear_claude_oauth_cooldown();
+        log::info!(
+            "Refreshed Claude OAuth access token (expires in {}s) via {}",
+            expires_in,
+            url
+        );
+        return Ok(());
+    }
+
+    // HTTP refresh can be rate-limited while the local Claude CLI still succeeds.
+    if rate_limited || !last_err.to_lowercase().contains("http 40") {
+        if let Ok(updated) = tokio::task::spawn_blocking(refresh_claude_oauth_via_cli).await {
+            match updated {
+                Ok(Some(mut refreshed)) => {
+                    // Preserve the original storage target when possible.
+                    refreshed.source = bundle.source.clone();
+                    if refreshed.document.is_none() {
+                        refreshed.document = bundle.document.clone();
+                    }
+                    *bundle = refreshed;
+                    clear_claude_oauth_cooldown();
+                    log::info!("Refreshed Claude OAuth credentials via Claude CLI fallback");
+                    return Ok(());
+                }
+                Ok(None) => {
+                    log::warn!("Claude CLI fallback ran but credentials are still expired");
+                }
+                Err(err) => {
+                    log::warn!("Claude CLI OAuth refresh fallback failed: {}", err);
+                }
+            }
+        }
+    }
+
+    if rate_limited {
+        return Err(
+            "Claude OAuth token refresh is rate limited. Try again in a few minutes, or run `claude` once to renew credentials."
+                .to_string(),
+        );
+    }
+
+    Err(format!(
+        "{}. Run `claude auth login` if this keeps failing.",
+        last_err
+    ))
+}
+
+fn refresh_claude_oauth_via_cli() -> Result<Option<ClaudeOAuthBundle>, String> {
+    let claude_path = resolve_claude_cli_path().ok_or_else(|| {
+        "Claude CLI not found for OAuth refresh fallback".to_string()
+    })?;
+
+    let mut command = std::process::Command::new(&claude_path);
+    command.args([
+        "-p",
+        "Respond with exactly: ok",
+        "--output-format",
+        "text",
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| format!("Failed to run Claude CLI refresh fallback: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Claude CLI refresh fallback failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let bundle = load_claude_oauth_bundle()
+        .ok_or_else(|| "Claude CLI ran but OAuth credentials were not found afterwards".to_string())?;
+    if bundle.is_expired(0) {
+        return Ok(None);
+    }
+    Ok(Some(bundle))
+}
+
+async fn resolve_claude_oauth_access_token(force_refresh: bool) -> Result<String, String> {
+    let mut bundle = tokio::task::spawn_blocking(load_claude_oauth_bundle)
+        .await
+        .map_err(|e| format!("Claude Code credential reader stopped unexpectedly: {}", e))?
+        .ok_or_else(|| {
+            let config_dir = claude_config_dir();
+            let credentials_path = config_dir.join(".credentials.json");
+            let mut checked_paths = vec![
+                "Windows Credential Manager (Claude Code-credentials)".to_string(),
+                credentials_path.display().to_string(),
+            ];
+            if let Some(claude_path) = resolve_claude_cli_path() {
+                checked_paths.insert(0, format!("{} auth status", claude_path.display()));
+            }
+            if settings_env_blocks_oauth() {
+                return "Claude Code is configured with third-party API env vars in ~/.claude/settings.json (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL). Remove them and run `claude auth login` to use official Claude subscription quota.".to_string();
+            }
+            if let Some(status) = read_claude_auth_status_text() {
+                if auth_status_uses_oauth(&status.auth_token_source) {
+                    return format!(
+                        "Claude OAuth login detected ({}) but credentials were not found. Run `claude auth login` again.",
+                        status.auth_token_source
+                    );
+                }
+            }
+            format!(
+                "Claude Code OAuth credentials not found. Checked: [{}]. Install Claude Code and run `claude auth login`.",
+                checked_paths.join(", ")
+            )
+        })?;
+
+    if force_refresh || bundle.needs_refresh() {
+        if bundle.refresh_token.as_ref().is_some_and(|t| !t.is_empty()) {
+            refresh_claude_oauth_bundle(&mut bundle).await?;
+        } else if bundle.is_expired(0) {
             return Err(
-                "Claude Code API key not configured. Add your sk-cp-... token in Settings."
+                "Claude OAuth access token expired. Run `claude auth login` to renew it."
                     .to_string(),
             );
         }
-        key.to_string()
-    } else {
-        tokio::task::spawn_blocking(|| {
-            let settings_path = get_claude_settings_path().ok_or_else(|| {
-                "Could not resolve Claude settings path on this system".to_string()
-            })?;
+    }
 
-            if !settings_path.exists() {
-                return Err(format!(
-                    "Claude Code settings not found at {}. Please run Claude Code at least once.",
-                    settings_path.display()
-                ));
+    Ok(bundle.access_token)
+}
+
+fn resolve_claude_cli_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            if !profile.is_empty() {
+                candidates.push(
+                    PathBuf::from(&profile)
+                        .join(".local")
+                        .join("bin")
+                        .join("claude.exe"),
+                );
             }
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            if !local.is_empty() {
+                candidates.push(
+                    PathBuf::from(&local)
+                        .join("Programs")
+                        .join("claude")
+                        .join("claude.exe"),
+                );
+            }
+        }
+    }
 
-            let settings_str = std::fs::read_to_string(&settings_path)
-                .map_err(|e| format!("Failed to read Claude Code settings: {}", e))?;
-            let settings: serde_json::Value = serde_json::from_str(&settings_str)
-                .map_err(|e| format!("Failed to parse Claude Code settings.json: {}", e))?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = shellexpand::tilde("~").to_string();
+        candidates.push(PathBuf::from(home).join(".local").join("bin").join("claude"));
+    }
 
-            settings
-                .get("env")
-                .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .ok_or_else(|| "ANTHROPIC_AUTH_TOKEN not found in ~/.claude/settings.json. Claude Code may not be configured with a proxy token.".to_string())
-        })
-        .await
-        .map_err(|error| {
-            format!(
-                "Claude Code settings reader stopped unexpectedly: {}",
-                error
-            )
-        })??
+    for path in candidates {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let which_cmd = if cfg!(target_os = "windows") {
+        "where.exe"
+    } else {
+        "which"
+    };
+    let which_arg = if cfg!(target_os = "windows") {
+        "claude.exe"
+    } else {
+        "claude"
     };
 
-    if !token.starts_with("sk-cp-") {
-        // Standard Anthropic token – no public balance API, show a clean placeholder
-        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    if let Ok(output) = std::process::Command::new(which_cmd).arg(which_arg).output() {
+        if output.status.success() {
+            if let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    let path = PathBuf::from(trimmed);
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ClaudeAuthStatusText {
+    auth_token_source: String,
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ClaudeAuthStatusJson {
+    email: Option<String>,
+    subscription_type: Option<String>,
+}
+
+fn parse_claude_auth_status_json(raw: &str) -> Option<ClaudeAuthStatusJson> {
+    let parsed: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    Some(ClaudeAuthStatusJson {
+        email: parsed
+            .get("email")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        subscription_type: parsed
+            .get("subscriptionType")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    })
+}
+
+fn read_claude_auth_status_json() -> Option<ClaudeAuthStatusJson> {
+    let claude_path = resolve_claude_cli_path()?;
+
+    let mut command = std::process::Command::new(&claude_path);
+    command.args(["auth", "status", "--json"]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_line = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with('{'))?;
+    parse_claude_auth_status_json(json_line)
+}
+
+fn parse_claude_auth_status_text(raw: &str) -> Option<ClaudeAuthStatusText> {
+    let mut auth_token_source = None;
+    let mut base_url = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Auth token:") {
+            let source = rest.trim();
+            if !source.is_empty() {
+                auth_token_source = Some(source.to_string());
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("Anthropic base URL:") {
+            let url = rest.trim();
+            if !url.is_empty() {
+                base_url = Some(url.to_string());
+            }
+        }
+    }
+
+    auth_token_source.map(|auth_token_source| ClaudeAuthStatusText {
+        auth_token_source,
+        base_url,
+    })
+}
+
+fn read_claude_auth_status_text() -> Option<ClaudeAuthStatusText> {
+    let claude_path = resolve_claude_cli_path()?;
+
+    let mut command = std::process::Command::new(&claude_path);
+    command.args(["auth", "status", "--text"]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        log::debug!(
+            "claude auth status failed ({}): {}",
+            claude_path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_claude_auth_status_text(&text)
+}
+
+fn auth_status_uses_oauth(source: &str) -> bool {
+    let lower = source.to_lowercase();
+    lower.contains("oauth") || lower.contains("claudeaioauth")
+}
+
+fn format_claude_plan_label(raw: &str) -> String {
+    match raw.trim() {
+        "" => String::new(),
+        "team_labs_standard" => "Team".to_string(),
+        "team_labs_pro" => "Team Pro".to_string(),
+        "team" => "Team".to_string(),
+        "max" => "Max".to_string(),
+        "pro" => "Pro".to_string(),
+        "default_claude_max_5x" => "Max 5x".to_string(),
+        "default_claude_max_20x" => "Max 20x".to_string(),
+        "stripe_subscription" => "Pro".to_string(),
+        other => other
+            .split('_')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn read_claude_credentials_document() -> Option<serde_json::Value> {
+    if let Some(doc) = read_json_file(&claude_config_dir().join(".credentials.json")) {
+        return Some(doc);
+    }
+
+    let config_dir = claude_config_dir();
+    let username = claude_keyring_username();
+    for service in claude_keyring_service_names(&config_dir) {
+        let entry = keyring::Entry::new(&service, &username).ok()?;
+        let raw = match entry.get_password() {
+            Ok(raw) => raw,
+            Err(keyring::Error::NoEntry) => continue,
+            Err(_) => continue,
+        };
+        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return Some(doc);
+        }
+    }
+
+    None
+}
+
+fn read_claude_profile_metadata() -> (Option<String>, Option<String>) {
+    let mut account_label = None;
+    let mut plan_type = None;
+
+    if let Some(status) = read_claude_auth_status_json() {
+        account_label = status.email;
+        if let Some(subscription) = status.subscription_type {
+            let formatted = format_claude_plan_label(&subscription);
+            if !formatted.is_empty() {
+                plan_type = Some(formatted);
+            }
+        }
+    }
+
+    let claude_json_path = PathBuf::from(shellexpand::tilde("~/.claude.json").to_string());
+    if let Some(claude_json) = read_json_file(&claude_json_path) {
+        if account_label.is_none() {
+            if let Some(oauth_account) = claude_json.get("oauthAccount") {
+                account_label = oauth_account
+                    .get("emailAddress")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+            }
+        }
+
+        if plan_type.is_none() {
+            if let Some(oauth_account) = claude_json.get("oauthAccount") {
+                if let Some(seat_tier) = oauth_account.get("seatTier").and_then(|v| v.as_str()) {
+                    let formatted = format_claude_plan_label(seat_tier);
+                    if !formatted.is_empty() {
+                        plan_type = Some(formatted);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(credentials) = read_claude_credentials_document() {
+        if account_label.is_none() {
+            account_label = credentials
+                .get("email")
+                .or_else(|| credentials.get("emailAddress"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+
+        if plan_type.is_none() {
+            if let Some(oauth) = credentials.get("claudeAiOauth") {
+                let raw_plan = oauth
+                    .get("subscriptionType")
+                    .or_else(|| oauth.get("rateLimitTier"))
+                    .and_then(|v| v.as_str());
+                if let Some(raw_plan) = raw_plan {
+                    let formatted = format_claude_plan_label(raw_plan);
+                    if !formatted.is_empty() {
+                        plan_type = Some(formatted);
+                    }
+                }
+            }
+        }
+    }
+
+    (account_label, plan_type)
+}
+
+fn apply_claude_profile_metadata(mut item: QuotaItem) -> QuotaItem {
+    let (account_label, plan_type) = read_claude_profile_metadata();
+    if item.account_label.is_none() {
+        item.account_label = account_label;
+    }
+    if item.plan_type.is_none() {
+        item.plan_type = plan_type;
+    }
+    item
+}
+
+fn claude_window_utilization(window: &serde_json::Value) -> Option<f64> {
+    window
+        .get("utilization")
+        .and_then(|v| v.as_f64())
+        .or_else(|| window.get("percent").and_then(|v| v.as_f64()))
+}
+
+fn claude_window_reset(window: &serde_json::Value) -> Option<String> {
+    window
+        .get("resets_at")
+        .and_then(|v| v.as_str())
+        .and_then(format_iso_to_local)
+}
+
+fn claude_limit_kind_label(kind: &str, scope: Option<&serde_json::Value>) -> String {
+    match kind {
+        "session" => "5h Usage".to_string(),
+        "weekly_all" => "7d Usage".to_string(),
+        "weekly_scoped" => scope
+            .and_then(|s| s.get("model"))
+            .and_then(|m| m.get("display_name"))
+            .and_then(|v| v.as_str())
+            .map(|name| format!("7d {name}"))
+            .unwrap_or_else(|| "7d Scoped".to_string()),
+        other if other.is_empty() => "Usage".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn parse_claude_limits_array(parsed: &serde_json::Value) -> Vec<QuotaBar> {
+    let Some(limits) = parsed.get("limits").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    limits
+        .iter()
+        .filter(|limit| {
+            limit
+                .get("is_active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+        })
+        .filter_map(|limit| {
+            let utilization = claude_window_utilization(limit)?;
+            let kind = limit.get("kind").and_then(|v| v.as_str()).unwrap_or("Usage");
+            Some(QuotaBar {
+                name: claude_limit_kind_label(kind, limit.get("scope")),
+                value: (100.0 - utilization).clamp(0.0, 100.0),
+                reset: claude_window_reset(limit),
+            })
+        })
+        .collect()
+}
+
+fn parse_claude_legacy_usage_windows(parsed: &serde_json::Value) -> Vec<QuotaBar> {
+    let window_specs = [
+        ("five_hour", "5h Usage"),
+        ("seven_day", "7d Usage"),
+        ("seven_day_sonnet", "7d Sonnet"),
+        ("seven_day_opus", "7d Opus"),
+    ];
+
+    window_specs
+        .iter()
+        .filter_map(|(field, label)| {
+            let window = parsed.get(field)?;
+            let utilization = claude_window_utilization(window)?;
+            Some(QuotaBar {
+                name: (*label).to_string(),
+                value: (100.0 - utilization).clamp(0.0, 100.0),
+                reset: claude_window_reset(window),
+            })
+        })
+        .collect()
+}
+
+fn parse_claude_oauth_usage_response(text: &str, item: &QuotaItem) -> Result<QuotaItem, String> {
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| format!("Failed to parse Claude OAuth usage response: {}", e))?;
+
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut bars = parse_claude_limits_array(&parsed);
+    if bars.is_empty() {
+        bars = parse_claude_legacy_usage_windows(&parsed);
+    }
+
+    if let Some(extra) = parsed.get("extra_usage") {
+        if extra
+            .get("is_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            if let Some(utilization) = extra.get("utilization").and_then(|v| v.as_f64()) {
+                let remaining = (100.0 - utilization).clamp(0.0, 100.0);
+                bars.push(QuotaBar {
+                    name: "Extra Usage".to_string(),
+                    value: remaining,
+                    reset: None,
+                });
+            }
+        }
+    }
+
+    if bars.is_empty() {
         return Ok(QuotaItem {
             id: item.id.clone(),
             name: item.name.clone(),
             provider: "claude-code".to_string(),
-            api_key: String::new(),
-            encrypted_api_key: None,
-            api_url: None,
-            json_path: None,
-            max_quota: None,
-            current_value: None,
-            error_msg: Some("Anthropic official tokens have no public balance API. Use an sk-cp- token for quota tracking.".to_string()),
+            error_msg: Some(format!(
+                "Could not find quota windows in Claude OAuth usage response. Raw: {}",
+                &text[..text.len().min(200)]
+            )),
             last_update: Some(now),
-            unit: None,
             ..Default::default()
         });
     }
 
-    // sk-cp- token – query remaining balance
+    let first_val = bars[0].value;
+    let primary_bar = &bars[0];
+    Ok(apply_claude_profile_metadata(QuotaItem {
+        id: item.id.clone(),
+        name: item.name.clone(),
+        provider: "claude-code".to_string(),
+        current_value: Some(first_val),
+        max_quota: Some(100.0),
+        unit: Some("%".to_string()),
+        primary_name: Some(primary_bar.name.clone()),
+        primary_reset: primary_bar.reset.clone(),
+        bars: Some(bars),
+        last_update: Some(now),
+        ..Default::default()
+    }))
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn claude_oauth_cooldown_remaining_secs() -> Option<u64> {
+    let until = CLAUDE_OAUTH_COOLDOWN_UNTIL.load(Ordering::Acquire);
+    if until == 0 {
+        return None;
+    }
+    let now = unix_now_secs();
+    if until <= now {
+        CLAUDE_OAUTH_COOLDOWN_UNTIL
+            .compare_exchange(until, 0, Ordering::AcqRel, Ordering::Acquire)
+            .ok();
+        return None;
+    }
+    Some(until - now)
+}
+
+fn arm_claude_oauth_cooldown(secs: u64) {
+    let clamped = secs
+        .clamp(CLAUDE_OAUTH_MIN_COOLDOWN_SECS, CLAUDE_OAUTH_MAX_COOLDOWN_SECS);
+    let until = unix_now_secs().saturating_add(clamped);
+    // Keep the longer of an existing cooldown and the newly requested one.
+    CLAUDE_OAUTH_COOLDOWN_UNTIL.fetch_max(until, Ordering::AcqRel);
+}
+
+fn clear_claude_oauth_cooldown() {
+    CLAUDE_OAUTH_COOLDOWN_UNTIL.store(0, Ordering::Release);
+}
+
+fn parse_retry_after_secs(header: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let raw = header?.to_str().ok()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Anthropic (and most APIs) send delta-seconds for 429.
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(secs);
+    }
+    // HTTP-date fallback (RFC 2822 / IMF-fixdate).
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(raw) {
+        let until = dt.timestamp().max(0) as u64;
+        return Some(until.saturating_sub(unix_now_secs()).max(1));
+    }
+    None
+}
+
+fn claude_oauth_rate_limit_error(remaining_secs: Option<u64>) -> String {
+    match remaining_secs {
+        Some(secs) if secs >= 60 => {
+            let mins = (secs + 59) / 60;
+            format!(
+                "Claude OAuth usage API is rate limited. Try again in about {} minute{}.",
+                mins,
+                if mins == 1 { "" } else { "s" }
+            )
+        }
+        Some(secs) => format!(
+            "Claude OAuth usage API is rate limited. Try again in about {} seconds.",
+            secs.max(1)
+        ),
+        None => {
+            "Claude OAuth usage API is rate limited. Try again in a few minutes.".to_string()
+        }
+    }
+}
+
+async fn fetch_claude_oauth_quota(
+    token: &str,
+    item: &QuotaItem,
+    config: &QuotaConfig,
+) -> Result<QuotaItem, String> {
+    // Serialize Claude OAuth usage calls so parallel quota items / manual refreshes
+    // cannot stampede the same rate-limited endpoint.
+    let lock = CLAUDE_OAUTH_FETCH_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = lock.lock().await;
+
+    if let Some(remaining) = claude_oauth_cooldown_remaining_secs() {
+        return Err(claude_oauth_rate_limit_error(Some(remaining)));
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap_or_default();
 
-    let res = client
-        .get("https://api.minimaxi.com/v1/token_plan/remains")
-        .header("Authorization", format!("Bearer {}", token))
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Network error querying Claude Code token balance: {}", e))?;
+    let send_usage = |bearer: String| {
+        let client = client.clone();
+        async move {
+            client
+                .get("https://api.anthropic.com/api/oauth/usage")
+                .header("Authorization", format!("Bearer {}", bearer))
+                .header("anthropic-beta", "oauth-2025-04-20")
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "claude-code/2.1.79")
+                .send()
+                .await
+                .map_err(|e| format!("Network error querying Claude OAuth usage: {}", e))
+        }
+    };
+
+    let mut bearer = token.to_string();
+    let mut res = send_usage(bearer.clone()).await?;
+
+    if res.status().as_u16() == 401 {
+        log::warn!("Claude OAuth usage API returned 401; refreshing access token and retrying once");
+        bearer = resolve_claude_oauth_access_token(true).await?;
+        res = send_usage(bearer).await?;
+    }
+
+    if res.status().as_u16() == 429 {
+        let retry_after = parse_retry_after_secs(res.headers().get(reqwest::header::RETRY_AFTER))
+            .unwrap_or(CLAUDE_OAUTH_DEFAULT_COOLDOWN_SECS);
+        arm_claude_oauth_cooldown(retry_after);
+        let remaining = claude_oauth_cooldown_remaining_secs();
+        log::warn!(
+            "Claude OAuth usage API rate limited; cooling down for ~{}s",
+            remaining.unwrap_or(retry_after)
+        );
+        // Return Err so the caller retains previous bars instead of wiping them.
+        return Err(claude_oauth_rate_limit_error(remaining));
+    }
+
+    if res.status().as_u16() == 401 {
+        return Err(
+            "Claude OAuth usage API unauthorized after token refresh. Run `claude auth login`."
+                .to_string(),
+        );
+    }
 
     if !res.status().is_success() {
-        let status = res.status();
-        let hint = match status.as_u16() {
-            401 => " Token may be expired; refresh your sk-cp- token.",
-            403 => " Access denied; check that this token still has quota access.",
-            429 => " Rate limited; try again later.",
-            s if (500..=599).contains(&s) => " Server error; try again later.",
-            _ => "",
-        };
         return Err(format!(
-            "Claude Code token balance API error: HTTP {}{}",
-            status, hint
+            "Claude OAuth usage API error: HTTP {}",
+            res.status()
         ));
     }
+
+    clear_claude_oauth_cooldown();
 
     let text = res
         .text()
         .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
+        .map_err(|e| format!("Failed to read Claude OAuth usage response: {}", e))?;
+    let mut result = parse_claude_oauth_usage_response(&text, item)?;
+    let viz = crate::quota_analytics::item_visualizations(item, config);
+    if crate::quota_analytics::visualizations_enabled(&viz) {
+        result.analytics = Some(crate::quota_analytics::build_claude_analytics(&viz));
+    }
+    Ok(result)
+}
 
-    let parsed: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Failed to parse token balance response: {}", e))?;
-
-    let data = parsed.get("token_plan").unwrap_or(&parsed);
-    let remain = data
-        .get("remains")
-        .or_else(|| data.get("remain").or_else(|| data.get("remaining")))
-        .and_then(|v| v.as_f64());
-
-    let total = data
-        .get("total")
-        .or_else(|| data.get("total_tokens"))
-        .and_then(|v| v.as_f64());
-
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-    let (current_val, max_val, unit) = if let (Some(r), Some(t)) = (remain, total) {
-        if t > 0.0 {
-            (Some((r / t) * 100.0), Some(100.0_f64), "%".to_string())
-        } else {
-            (Some(r), None, "tokens".to_string())
+/// Fetch Claude Code official subscription quota via OAuth usage API.
+async fn fetch_claude_code_quota(item: &QuotaItem, config: &QuotaConfig) -> Result<QuotaItem, String> {
+    let mode = quota_auth_mode(item);
+    let token = if mode == QuotaAuthMode::ApiKey {
+        let key = item.api_key.trim();
+        if key.is_empty() {
+            return Err(
+                "Claude Code OAuth token not configured. Leave API key empty to use local login.".to_string(),
+            );
         }
-    } else if let Some(r) = remain {
-        (Some(r), None, "tokens".to_string())
+        key.to_string()
     } else {
-        return Err(format!(
-            "Could not find balance in Claude Code token plan response. Raw: {}",
-            &text[..text.len().min(300)]
-        ));
+        resolve_claude_oauth_access_token(false).await?
     };
 
-    Ok(QuotaItem {
-        id: item.id.clone(),
-        name: item.name.clone(),
-        provider: "claude-code".to_string(),
-        api_key: String::new(),
-        encrypted_api_key: None,
-        api_url: None,
-        json_path: None,
-        max_quota: max_val,
-        current_value: current_val,
-        error_msg: None,
-        last_update: Some(now),
-        unit: Some(unit),
-        ..Default::default()
-    })
+    fetch_claude_oauth_quota(&token, item, config).await
 }
 
 fn resolve_quota_provider(item: &QuotaItem) -> &str {
@@ -2524,6 +3589,17 @@ async fn perform_quota_fetch_locked(
         .iter()
         .map(|item| (item.id.clone(), item.clone()))
         .collect();
+    let previous_by_id: std::collections::HashMap<String, QuotaItem> = state
+        .quota_data
+        .lock()
+        .ok()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| (item.id.clone(), item.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     let show_account_name = config.show_account_name.unwrap_or(false);
 
     let client = reqwest::Client::builder()
@@ -2579,7 +3655,7 @@ async fn perform_quota_fetch_locked(
         },
         async {
             if needs_provider("cursor") {
-                Some(fetch_cursor_quota(show_account_name).await)
+                Some(fetch_cursor_quota(show_account_name, &config).await)
             } else {
                 None
             }
@@ -2589,12 +3665,14 @@ async fn perform_quota_fetch_locked(
     let mut prefetch_by_id: std::collections::HashMap<String, Result<QuotaItem, String>> =
         std::collections::HashMap::new();
     let mut prefetch_set = tokio::task::JoinSet::new();
+    let quota_config = std::sync::Arc::new(config.clone());
     for item in copilot_items
         .into_iter()
         .chain(qoder_items)
         .chain(pioneer_items)
         .chain(claude_items)
     {
+        let quota_config = std::sync::Arc::clone(&quota_config);
         prefetch_set.spawn(async move {
             let id = item.id.clone();
             let result = match item.provider.as_str() {
@@ -2610,7 +3688,7 @@ async fn perform_quota_fetch_locked(
                     }),
                 "qoder-cn" => fetch_qoder_cn_quota(&item).await,
                 "pioneer" => fetch_pioneer_quota(&item).await,
-                "claude-code" => fetch_claude_code_quota(&item).await,
+                "claude-code" => fetch_claude_code_quota(&item, quota_config.as_ref()).await,
                 other => Err(format!("Unsupported prefetch provider: {}", other)),
             };
             (id, result)
@@ -2713,7 +3791,17 @@ async fn perform_quota_fetch_locked(
                 match prefetch_by_id.get(&item.id) {
                     Some(Ok(resolved_item)) => fetched_items.push(resolved_item.clone()),
                     Some(Err(e)) => {
-                        push_quota_provider_fetch_error(&mut fetched_items, item, "Claude Code", e);
+                        // Prefer live previous bars (incl. analytics) over config snapshot.
+                        let retain_from = previous_by_id
+                            .get(&item.id)
+                            .filter(|prev| quota_item_has_display_data(prev))
+                            .unwrap_or(item);
+                        push_quota_provider_fetch_error(
+                            &mut fetched_items,
+                            retain_from,
+                            "Claude Code",
+                            e,
+                        );
                     }
                     None => {
                         push_prefetch_missing_item(&mut fetched_items, item, "claude-code");
@@ -3056,6 +4144,9 @@ fn merge_quota_item_config(fetched: &mut QuotaItem, source: &QuotaItem) {
     if source.auth_mode.is_some() {
         fetched.auth_mode = source.auth_mode.clone();
     }
+    if source.visualizations.is_some() {
+        fetched.visualizations = source.visualizations.clone();
+    }
     if source.api_url.is_some() {
         fetched.api_url = source.api_url.clone();
     }
@@ -3105,6 +4196,7 @@ fn is_fetch_config_different(a: &QuotaConfig, b: &QuotaConfig) -> bool {
                     || item_a.encrypted_api_key != item_b.encrypted_api_key
                     || item_a.api_url != item_b.api_url
                     || item_a.json_path != item_b.json_path
+                    || item_a.visualizations != item_b.visualizations
                 {
                     return true;
                 }
@@ -3319,5 +4411,134 @@ mod tests {
             bars.iter().map(|bar| bar.value).collect::<Vec<_>>(),
             vec![90.0, 55.0]
         );
+    }
+
+    #[test]
+    fn parse_claude_auth_status_json_reads_subscription_type() {
+        let json = r#"{"loggedIn":true,"email":"user@example.com","subscriptionType":"team","orgName":"Acme"}"#;
+        let status = parse_claude_auth_status_json(json).expect("should parse");
+        assert_eq!(status.email.as_deref(), Some("user@example.com"));
+        assert_eq!(status.subscription_type.as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn format_claude_plan_label_maps_known_tiers() {
+        assert_eq!(format_claude_plan_label("team_labs_standard"), "Team");
+        assert_eq!(format_claude_plan_label("default_claude_max_5x"), "Max 5x");
+        assert_eq!(format_claude_plan_label("pro"), "Pro");
+    }
+
+    #[test]
+    fn parse_claude_auth_status_text_reads_oauth_source() {
+        let text = "Auth token: claudeAiOauth\n";
+        let status = parse_claude_auth_status_text(text).expect("should parse");
+        assert_eq!(status.auth_token_source, "claudeAiOauth");
+        assert!(auth_status_uses_oauth(&status.auth_token_source));
+    }
+
+    #[test]
+    fn parse_retry_after_secs_reads_delta_seconds() {
+        let value = reqwest::header::HeaderValue::from_static("120");
+        assert_eq!(parse_retry_after_secs(Some(&value)), Some(120));
+        assert_eq!(parse_retry_after_secs(None), None);
+    }
+
+    #[test]
+    fn claude_oauth_rate_limit_error_includes_wait_hint() {
+        let msg = claude_oauth_rate_limit_error(Some(180));
+        assert!(msg.contains("rate limited"));
+        assert!(msg.contains("3 minute"));
+    }
+
+    #[test]
+    fn claude_oauth_cooldown_arms_and_clears() {
+        clear_claude_oauth_cooldown();
+        assert!(claude_oauth_cooldown_remaining_secs().is_none());
+        arm_claude_oauth_cooldown(90);
+        let remaining = claude_oauth_cooldown_remaining_secs().expect("cooldown armed");
+        assert!(remaining >= 60 && remaining <= 90);
+        clear_claude_oauth_cooldown();
+        assert!(claude_oauth_cooldown_remaining_secs().is_none());
+    }
+
+    #[test]
+    fn parse_claude_oauth_usage_response_builds_bars() {
+        let json = r#"{
+            "five_hour": {"utilization": 35.0, "resets_at": "2026-09-01T18:00:00Z"},
+            "seven_day": {"utilization": 17.0, "resets_at": "2026-09-08T18:00:00Z"}
+        }"#;
+        let item = QuotaItem {
+            id: "claude-code-1".to_string(),
+            name: "Claude Code".to_string(),
+            provider: "claude-code".to_string(),
+            ..Default::default()
+        };
+        let res = parse_claude_oauth_usage_response(json, &item).expect("should parse");
+        assert!(res.error_msg.is_none());
+        assert_eq!(res.current_value, Some(65.0));
+        let bars = res.bars.unwrap();
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].name, "5h Usage");
+        assert_eq!(bars[0].value, 65.0);
+        assert!(bars[0].reset.as_ref().is_some_and(|reset| reset.contains("2026-09-01")));
+        assert_eq!(bars[1].name, "7d Usage");
+        assert_eq!(bars[1].value, 83.0);
+        assert!(bars[1].reset.as_ref().is_some_and(|reset| reset.contains("2026-09-08")));
+        assert_eq!(res.primary_reset, bars[0].reset);
+    }
+
+    #[test]
+    fn parse_claude_oauth_usage_response_prefers_limits_array() {
+        let json = r#"{
+            "five_hour": {"utilization": 99.0, "resets_at": "2026-09-01T18:00:00Z"},
+            "limits": [
+                {"kind": "session", "percent": 35.0, "resets_at": "2026-09-01T20:00:00Z", "is_active": true},
+                {"kind": "weekly_all", "percent": 17.0, "resets_at": "2026-09-08T20:00:00Z", "is_active": true}
+            ]
+        }"#;
+        let item = QuotaItem {
+            id: "claude-code-1".to_string(),
+            name: "Claude Code".to_string(),
+            provider: "claude-code".to_string(),
+            ..Default::default()
+        };
+        let res = parse_claude_oauth_usage_response(json, &item).expect("should parse");
+        let bars = res.bars.unwrap();
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].name, "5h Usage");
+        assert_eq!(bars[0].value, 65.0);
+        assert_eq!(bars[1].name, "7d Usage");
+        assert_eq!(bars[1].value, 83.0);
+    }
+
+    #[test]
+    fn migrate_quota_visualizations_copies_global_settings_onto_supported_items() {
+        let mut config = QuotaConfig {
+            items: vec![
+                QuotaItem {
+                    id: "cursor-1".to_string(),
+                    provider: "cursor".to_string(),
+                    ..Default::default()
+                },
+                QuotaItem {
+                    id: "codex-1".to_string(),
+                    provider: "codex".to_string(),
+                    ..Default::default()
+                },
+            ],
+            visualizations: Some(crate::models::QuotaVisualizationConfig {
+                daily_bars: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(migrate_quota_visualizations(&mut config));
+        assert!(config.visualizations.is_none());
+        assert_eq!(
+            config.items[0].visualizations.as_ref().and_then(|v| v.daily_bars),
+            Some(true)
+        );
+        assert!(config.items[1].visualizations.is_none());
     }
 }

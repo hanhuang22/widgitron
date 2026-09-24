@@ -233,6 +233,7 @@ pub async fn refresh_gpu_data(
 #[tauri::command]
 pub async fn show_main(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -345,7 +346,15 @@ async fn create_widget_impl_with_options(
     // Snap, which can unexpectedly maximize a widget near a screen edge.
     let _ = win.set_maximizable(false);
 
-    let _ = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id);
+    if let Err(err) =
+        crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
+    {
+        log::error!(
+            "Failed to restore widget layout for '{}' (window may keep bootstrap size 320x400): {}",
+            id,
+            err
+        );
+    }
     let _ = win.show();
     if focus_window {
         let _ = win.set_focus();

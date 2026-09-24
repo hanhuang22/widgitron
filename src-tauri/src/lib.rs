@@ -34,6 +34,7 @@ mod logger;
 mod models;
 mod ota;
 mod quota;
+mod quota_analytics;
 mod secrets;
 mod sidebar_dock;
 mod sidebar_hotkey;
@@ -54,6 +55,11 @@ pub fn run() {
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_filter(|label| label == "main")
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
@@ -270,6 +276,7 @@ pub fn run() {
                             ..
                         } => {
                             if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                let _ = window.unminimize();
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
@@ -318,20 +325,53 @@ pub fn run() {
                 log::warn!("Failed to initialize sidebar docking: {}", err);
             }
 
-            // Ensure Main Window is visible (or hidden based on config)
-            if let Some(main_win) = handle.get_webview_window("main") {
-                if !app_config.hide_on_startup.unwrap_or(false) {
-                    let _ = main_win.show();
-                    let _ = main_win.set_focus();
-                } else {
-                    let _ = main_win.hide();
-                }
-            }
-
+            let handle_main = handle.clone();
             let handle_gpu = handle.clone();
             let handle_deadline = handle.clone();
             let handle_arxiv = handle.clone();
             let handle_quota = handle.clone();
+
+            // Ensure Main Window is visible (or hidden based on config).
+            // NOTE: We intentionally delay this by 200ms to ensure tauri-plugin-window-state's
+            // async restore callback (on_webview_created) has already fired before we show/hide.
+            // Without the delay, window-state may re-apply an old `visible: false` after our show().
+            let hide_on_startup = app_config.hide_on_startup.unwrap_or(false);
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                log::warn!("[DIAG] Attempting to show main window (hide_on_startup={})", hide_on_startup);
+                match handle_main.get_webview_window("main") {
+                    None => log::warn!("[DIAG] get_webview_window('main') returned None!"),
+                    Some(main_win) => {
+                        // Log current position before showing
+                        let pos_before = main_win.outer_position();
+                        let size_before = main_win.outer_size();
+                        log::warn!("[DIAG] main window found, is_visible={:?} pos={:?} size={:?}", main_win.is_visible(), pos_before, size_before);
+
+                        if !hide_on_startup {
+                            let _ = main_win.unminimize();
+                            let _ = main_win.show();
+
+                            // Force window onto primary monitor to recover from off-screen position
+                            if let Ok(Some(monitor)) = main_win.primary_monitor() {
+                                let mon_pos = monitor.position();
+                                let mon_size = monitor.size();
+                                let scale = monitor.scale_factor();
+                                let win_w = (1000.0 * scale) as i32;
+                                let win_h = (700.0 * scale) as i32;
+                                let center_x = mon_pos.x + (mon_size.width as i32 - win_w) / 2;
+                                let center_y = mon_pos.y + (mon_size.height as i32 - win_h) / 2;
+                                log::warn!("[DIAG] Moving main window to center: ({},{}) {}x{}", center_x, center_y, win_w, win_h);
+                                let _ = main_win.set_position(tauri::PhysicalPosition::new(center_x, center_y));
+                            }
+
+                            let _ = main_win.set_focus();
+                            log::warn!("[DIAG] is_visible_after={:?} pos_after={:?}", main_win.is_visible(), main_win.outer_position());
+                        } else {
+                            let _ = main_win.hide();
+                        }
+                    }
+                }
+            });
 
             tauri::async_runtime::spawn(async move {
                 let active_map = app_config.active_widgets.unwrap_or_default();
@@ -399,7 +439,8 @@ pub fn run() {
                 )
             {
                 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                let _ = window.app_handle().save_window_state(StateFlags::all());
+                let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
+                let _ = window.app_handle().save_window_state(flags);
                 return;
             }
 

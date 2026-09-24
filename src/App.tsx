@@ -58,6 +58,7 @@ import { WindowButton } from "./components/WindowButton";
 import { MasterSwitch } from "./components/MasterSwitch";
 import { DashboardServiceToggleError, ToggleErrorBanner } from "./components/SettingsRefreshError";
 import { ServiceErrorBanners } from "./components/ServiceErrorBanners";
+import { QuotaVisualizations } from "./components/QuotaVisualizations";
 import { StatCard } from "./components/StatCard";
 import { WidgetPreviewCard } from "./components/WidgetPreviewCard";
 import { CopyButton } from "./components/CopyButton";
@@ -3017,7 +3018,10 @@ function App() {
                                 : []),
                             ];
 
-                      const showBarReset = q.provider === "codex" || q.provider === "antigravity";
+                      const showBarReset =
+                        q.provider === "codex" ||
+                        q.provider === "antigravity" ||
+                        q.provider === "claude-code";
                       const isManual = q.provider === "manual";
 
                       return (
@@ -3130,6 +3134,26 @@ function App() {
                                 {q.error_msg}
                               </div>
                             )}
+
+                            <QuotaVisualizations
+                              provider={q.provider}
+                              analytics={q.analytics}
+                              config={
+                                quotaConfig?.items?.find((item) => item.id === q.id)?.visualizations
+                                ?? q.visualizations
+                                ?? quotaConfig?.visualizations
+                              }
+                              theme={{
+                                accent: "#06b6d4",
+                                subText: appConfig.theme === "light" ? "#64748b" : "#94a3b8",
+                                mainText: appConfig.theme === "light" ? "#0f172a" : "#ffffff",
+                                scheme: appConfig.theme === "light" ? "light" : "dark",
+                                emptyCell:
+                                  appConfig.theme === "light"
+                                    ? "rgba(15,23,42,0.08)"
+                                    : "rgba(255,255,255,0.08)",
+                              }}
+                            />
                           </div>
                         </div>
                       );

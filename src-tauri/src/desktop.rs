@@ -14,7 +14,9 @@ unsafe extern "system" fn enum_window(
     let len = GetClassNameW(hwnd, &mut class_name);
     let name = String::from_utf16_lossy(&class_name[..len as usize]);
 
-    if name == "WorkerW" {
+    if name == "WorkerW" || name == "Progman" {
+        use windows::Win32::Foundation::{SetLastError, WIN32_ERROR};
+        SetLastError(WIN32_ERROR(0));
         let shell_view = FindWindowExW(
             Some(hwnd),
             None,
@@ -22,10 +24,13 @@ unsafe extern "system" fn enum_window(
             None,
         )
         .ok();
-        if let Some(sv) = shell_view {
-            // Parent directly to SHELLDLL_DefView
-            *p_workerw = sv;
+        if shell_view.is_some() {
+            // Found the window (WorkerW or Progman) that hosts SHELLDLL_DefView
+            *p_workerw = hwnd;
             return BOOL(0);
+        } else if (*p_workerw).0.is_null() {
+            // Save fallback WorkerW/Progman handle
+            *p_workerw = hwnd;
         }
     }
     BOOL(1)
@@ -157,7 +162,11 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
                     (rect.top + rect.bottom) / 2,
                 );
 
-                let progman = unsafe { FindWindowW(windows::core::w!("Progman"), None) }.ok();
+                use windows::Win32::Foundation::{SetLastError, WIN32_ERROR};
+                unsafe { SetLastError(WIN32_ERROR(0)); }
+                let progman_res = unsafe { FindWindowW(windows::core::w!("Progman"), None) };
+                log::info!("Progman FindWindowW result: {:?}", progman_res);
+                let progman = progman_res.ok();
                 let mut result = 0;
                 if let Some(p) = progman {
                     unsafe {
@@ -178,35 +187,52 @@ pub fn set_desktop_mode_now(app: &AppHandle, label: &str, enabled: bool) -> Resu
 
                 // Check Progman first
                 if let Some(p) = progman {
+                    unsafe { SetLastError(WIN32_ERROR(0)); }
                     if let Ok(sv) = unsafe {
                         FindWindowExW(Some(p), None, windows::core::w!("SHELLDLL_DefView"), None)
                     } {
+                        log::info!("Found SHELLDLL_DefView in Progman: {:?}", sv);
                         shell_view = sv;
                     }
                 }
 
-                // Check WorkerW if not found
+                let mut workerw = HWND(std::ptr::null_mut());
                 if shell_view.0.is_null() {
-                    let mut workerw = HWND(std::ptr::null_mut());
                     unsafe {
+                        SetLastError(WIN32_ERROR(0));
                         let _ = EnumWindows(
                             Some(enum_window),
                             LPARAM(&mut workerw as *mut HWND as isize),
                         );
                     }
-                    if !workerw.0.is_null() {
-                        shell_view = workerw; // enum_window now returns SHELLDLL_DefView directly
-                    }
+                    log::info!("EnumWindows WorkerW result: {:?}", workerw);
                 }
 
-                let target_parent = if !shell_view.0.is_null() {
+                let mut target_parent = if !workerw.0.is_null() {
+                    Some(workerw)
+                } else if !shell_view.0.is_null() {
                     use windows::Win32::UI::WindowsAndMessaging::GetParent as GetWindowParent;
-                    unsafe { GetWindowParent(shell_view).ok() }
+                    unsafe {
+                        SetLastError(WIN32_ERROR(0));
+                        GetWindowParent(shell_view)
+                            .ok()
+                            .or(Some(shell_view))
+                            .or(progman)
+                    }
                 } else if let Some(p) = progman {
                     Some(p)
                 } else {
                     None
                 };
+
+                if target_parent.is_none() {
+                    use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+                    let desktop_wnd = unsafe { GetDesktopWindow() };
+                    if !desktop_wnd.0.is_null() {
+                        log::info!("Falling back to GetDesktopWindow: {:?}", desktop_wnd);
+                        target_parent = Some(desktop_wnd);
+                    }
+                }
 
                 if let Some(parent) = target_parent {
                     log::info!(

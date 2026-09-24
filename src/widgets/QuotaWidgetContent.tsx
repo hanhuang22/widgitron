@@ -9,7 +9,8 @@ import { listenServiceUpdateEvents } from "../utils/serviceUpdateEvents";
 import { LIVE_DATA_SECTION, refetchSectionLiveData } from "../utils/sectionLiveData";
 import { CACHED_LABELS, cachedLabelWhen } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
-import type { QuotaItem } from "../types/config";
+import type { QuotaItem, QuotaItemConfig, QuotaVisualizationConfig } from "../types/config";
+import { QuotaVisualizations } from "../components/QuotaVisualizations";
 import type { AntigravitySetupStatus } from "../types/tauri";
 import { tauriInvoke } from "../utils/tauriInvoke";
 import { tauriListen } from "../utils/tauriListen";
@@ -55,7 +56,7 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
   const [quotaMonitorStatus, setQuotaMonitorStatus] = useState<QuotaMonitorStatus | null>(null);
   const [showAccountName, setShowAccountName] = useState(false);
   const [showPlanType, setShowPlanType] = useState(true);
-  const [configItems, setConfigItems] = useState<{ id: string }[]>([]);
+  const [configItems, setConfigItems] = useState<QuotaItemConfig[]>([]);
   const [serviceEnabled, setServiceEnabled] = useState(true);
   const [dashboardTheme, setDashboardTheme] = useState<"light" | "dark">("dark");
   
@@ -75,6 +76,11 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
     }
     return q.name;
   };
+
+  const visualizationsFor = (q: QuotaItem): QuotaVisualizationConfig | null =>
+    configItems.find((item) => item.id === q.id)?.visualizations
+    ?? q.visualizations
+    ?? null;
 
   useEffect(() => {
     let active = true;
@@ -439,7 +445,10 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
               const headerReset =
                 q.provider === "cursor" || q.provider === "copilot" ? q.primary_reset : null;
               // Codex: each bar shows its own reset inline (not in header)
-              const showBarReset = q.provider === "codex" || q.provider === "antigravity";
+              const showBarReset =
+                q.provider === "codex" ||
+                q.provider === "antigravity" ||
+                q.provider === "claude-code";
 
               return (
                 <div
@@ -501,6 +510,22 @@ export function QuotaWidgetContent({ hideHeader = false }: { hideHeader?: boolea
                     })}
 
                     {renderQuotaAlert(q, expandedErrors, toggleErrorExpand)}
+
+                    <QuotaVisualizations
+                      provider={q.provider}
+                      analytics={q.analytics}
+                      config={visualizationsFor(q)}
+                      theme={{
+                        accent,
+                        subText,
+                        mainText,
+                        scheme: dashboardTheme,
+                        emptyCell:
+                          dashboardTheme === "light"
+                            ? "rgba(15,23,42,0.08)"
+                            : "rgba(255,255,255,0.08)",
+                      }}
+                    />
                   </div>
 
                   {/* Glowing Background Blob */}

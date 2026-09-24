@@ -193,7 +193,7 @@ export function resolveSidebarTheme(theme?: SidebarThemeConfig): ResolvedSidebar
       blur: theme.blur,
     });
   }
-  return sidebarThemePreset("midnight");
+  return sidebarThemePreset("light");
 }
 
 export function selectSidebarTheme(
@@ -291,7 +291,7 @@ export function removeSidebarTheme(
   const themes = (theme?.themes || []).filter((candidate) => candidate.id !== id);
   const activeId =
     theme?.active_theme_id === id
-      ? "midnight"
+      ? "light"
       : theme?.active_theme_id === "transparent"
         ? "light"
         : theme?.active_theme_id;
