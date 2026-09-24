@@ -82,9 +82,22 @@ above. The Rust build compiles its own OpenSSL for SSH support, so a separate
 Homebrew OpenSSL installation is not required. The generated app and disk image
 are under `src-tauri/target/release/bundle/`.
 
-The macOS sidebar supports tray access, positioning, pinning, and hiding. Its
-Windows-only edge reveal and global hotkey are not available on macOS yet.
-Desktop embedding is also Windows-only; on macOS widgets remain regular windows.
+On macOS, Widgitron starts with the main dashboard. Open the sidebar from the
+dashboard's **Open Sidebar** button or the menu bar icon. The sidebar stays
+visible until you close it; **Pin Display** also opens it automatically at the
+next launch. Use **Independent Widgets** on the dashboard to show individual
+floating windows as needed, and **Hide All Widgets** to clear the desktop.
+The menu bar icon also reopens the dashboard and hides all floating widgets.
+
+The macOS default is Simplified Chinese; change it in **Settings → General →
+Interface Language**. Existing macOS profiles receive a one-time display
+migration: the legacy four-widget auto-open layout is cleared (explicitly
+pinned widgets stay open), and legacy transparent widget themes switch to
+readable presets. Later user choices are retained.
+
+Windows-only edge reveal and global hotkey are not available on macOS.
+Desktop embedding is Windows-only; macOS widgets remain regular windows and
+can optionally be kept above other windows.
 When a macOS update is available, the app opens its disk image for manual installation.
 
 ## 🤝 Contributing

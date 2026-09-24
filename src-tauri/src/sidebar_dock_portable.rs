@@ -1,9 +1,11 @@
 use once_cell::sync::OnceCell;
 use serde::Serialize;
 use std::sync::Mutex;
+#[cfg(not(target_os = "macos"))]
+use tauri::WindowEvent;
 use tauri::{
     AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::config_store;
@@ -100,17 +102,20 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
         .set(Mutex::new(runtime))
         .map_err(|_| "Sidebar dock controller is already running".to_string())?;
 
-    let blur_app = app.clone();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Focused(false)) {
-            let should_collapse = lock_runtime()
-                .map(|runtime| runtime.state.expanded && !runtime.state.pinned)
-                .unwrap_or(false);
-            if should_collapse {
-                let _ = collapse(&blur_app);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let blur_app = app.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, WindowEvent::Focused(false)) {
+                let should_collapse = lock_runtime()
+                    .map(|runtime| runtime.state.expanded && !runtime.state.pinned)
+                    .unwrap_or(false);
+                if should_collapse {
+                    let _ = collapse(&blur_app);
+                }
             }
-        }
-    });
+        });
+    }
 
     position_sidebar(&app, &window)?;
     if expanded {

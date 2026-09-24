@@ -52,6 +52,8 @@ import { formatArxivKeywordLabel, groupArxivPapersByKeyword } from "./utils/arxi
 import type { AppConfig, ArxivConfig, ArxivPaper, GpuConfig, GpuInfo, PaperConfig, PaperDeadlineInfo, QuotaBarDisplay, QuotaConfig, QuotaItem, ServerGpuData } from "./types/config";
 import type { SidebarDockState, UpdateInfo } from "./types/tauri";
 import { resolveWidgetTheme } from "./utils/widgetTheme";
+import { isMacOS } from "./utils/platform";
+import { resolveLanguage, useUiLocalization } from "./utils/localization";
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel, messageShowsCached } from "./utils/cachedLabels";
 import { SidebarLink } from "./components/SidebarLink";
 import { WindowButton } from "./components/WindowButton";
@@ -429,7 +431,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("dashboard");
   const [isMaximized, setIsMaximized] = useState(false);
   const [windowLabel, setWindowLabel] = useState("");
-  const [isLocked, setIsLocked] = useState(true);
+  const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
@@ -569,6 +571,7 @@ function App() {
       return { theme: "dark" };
     }
   });
+  useUiLocalization(resolveLanguage(appConfig.language));
   const [isAutostart, setIsAutostart] = useState(false);
   const [activeWidgets, setActiveWidgets] = useState<string[]>([]);
   const [themeConfig, setThemeConfig] = useState<WidgetThemeConfig>({ themes: [], assignments: {} });
@@ -811,7 +814,7 @@ function App() {
           if (labelsFromConfig !== null) {
             setActiveWidgets(labelsFromConfig);
           } else {
-            setActiveWidgets([
+            setActiveWidgets(isMacOS ? [] : [
               ...(ac.gpu_enabled !== false ? [serviceWidgetMeta("gpu_enabled").id] : []),
               ...(ac.deadline_enabled !== false ? [serviceWidgetMeta("deadline_enabled").id] : []),
               ...(ac.arxiv_enabled !== false ? [serviceWidgetMeta("arxiv_enabled").id] : []),
@@ -1899,7 +1902,7 @@ function App() {
                 .then(setSidebarDockState)
                 .catch(console.error);
             }}
-            className={`flex shrink-0 items-center justify-center shadow-lg opacity-0 scale-90 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 hover:brightness-110 focus-visible:opacity-100 focus-visible:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 ${sidebarPinHandlePosition[sidebarDockState.edge]} ${sidebarPinHandleShape[sidebarDockState.edge]} ${
+            className={`flex shrink-0 items-center justify-center shadow-lg transition-all duration-200 hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 ${isMacOS ? "opacity-100 scale-100" : "opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 focus-visible:opacity-100 focus-visible:scale-100"} ${sidebarPinHandlePosition[sidebarDockState.edge]} ${sidebarPinHandleShape[sidebarDockState.edge]} ${
               sidebarIsLight
                 ? "text-slate-600 hover:text-slate-950"
                 : "text-slate-300 hover:text-white"
@@ -1934,7 +1937,7 @@ function App() {
               event.stopPropagation();
               tauriInvoke("hide_sidebar").catch(console.error);
             }}
-            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-200/35 bg-red-500/85 text-white shadow-lg opacity-0 scale-90 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 hover:bg-red-500 focus-visible:opacity-100 focus-visible:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/90 ${sidebarCloseButtonPosition[sidebarDockState.edge]}`}
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-200/35 bg-red-500/85 text-white shadow-lg transition-all duration-200 hover:bg-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/90 ${isMacOS ? "opacity-100 scale-100" : "opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 focus-visible:opacity-100 focus-visible:scale-100"} ${sidebarCloseButtonPosition[sidebarDockState.edge]}`}
           >
             <X size={13} strokeWidth={2.5} />
           </button>
@@ -1943,8 +1946,8 @@ function App() {
             so this drag strip has no separate tint, blur layer, or divider. */}
         <header
           aria-label="Drag sidebar"
-          className="h-4 shrink-0 cursor-grab active:cursor-grabbing"
-          onMouseDown={startDrag}
+          className={`h-4 shrink-0 ${isMacOS ? "cursor-default" : "cursor-grab active:cursor-grabbing"}`}
+          onMouseDown={isMacOS ? undefined : startDrag}
         />
         {sidebarDockState.dragging ? (
           <div className="absolute inset-2 z-50 pointer-events-none rounded-md border border-dashed border-sky-300/80 bg-sky-400/10">
@@ -2092,10 +2095,11 @@ function App() {
     return (
       <div className="absolute inset-0 flex flex-col group select-none overflow-hidden bg-transparent p-0">
         {/* Floating Controls (Now inside the window, but top-right) */}
-        <div className="absolute top-1 right-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-50">
+        <div className={`absolute top-1 right-1 flex items-center gap-1 transition-opacity duration-300 z-50 ${isMacOS ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
           <button
             data-no-drag="true"
             onClick={toggleLock}
+            title={isLocked ? "Unlock to move" : "Lock position"}
             className="w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 text-white/70 hover:text-white transition-all shadow-lg backdrop-blur-md"
           >
             {isLocked ? <Lock size={12} /> : <Unlock size={12} />}
@@ -2106,13 +2110,14 @@ function App() {
             className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
               isPinned ? "text-blue-400" : "text-white/70"
             } hover:text-white transition-all shadow-lg backdrop-blur-md`}
-            title={isPinned ? "Unpin (Embed in Desktop)" : "Pin to top"}
+            title={isPinned ? (isMacOS ? "Keep in normal window order" : "Unpin (Embed in Desktop)") : "Keep above other windows"}
           >
             {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
           </button>
           <button
             data-no-drag="true"
             onClick={handleClose}
+            title="Hide widget"
             className="w-7 h-7 flex items-center justify-center rounded-md bg-red-500/30 border border-red-500/20 text-red-400 hover:bg-red-50 hover:text-white transition-all shadow-lg backdrop-blur-md"
           >
             <X size={12} />
@@ -2149,6 +2154,20 @@ function App() {
           {windowLabel.includes("arxiv") && <ArxivWidgetContent />}
           {isQuota && <QuotaWidgetContent />}
         </div>
+        {isMacOS && <button
+          type="button"
+          data-no-drag="true"
+          aria-label="Resize widget"
+          title="Resize widget"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            appWindow.startResizeDragging("SouthEast").catch(console.error);
+          }}
+          className="absolute bottom-1 right-1 z-50 flex h-7 w-7 items-center justify-center rounded-md text-slate-400/70 hover:bg-white/10 hover:text-white cursor-se-resize"
+        >
+          <Maximize2 size={12} />
+        </button>}
       </div>
     );
   }
@@ -2327,8 +2346,9 @@ function App() {
                         appConfig.theme === "light" ? "text-slate-900" : "text-white"
                       }`}
                     >
-                      Quick Launch Widgets
+                      Independent Widgets
                     </h2>
+                    <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => tauriInvoke("show_sidebar")}
@@ -2341,7 +2361,25 @@ function App() {
                       <Activity size={14} />
                       Open Sidebar
                     </button>
+                    {activeWidgets.length > 0 && <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await tauriInvoke("hide_all_widgets");
+                          setActiveWidgets([]);
+                        } catch (error) {
+                          setToggleWidgetError(String(error));
+                        }
+                      }}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-black uppercase tracking-widest transition-colors ${appConfig.theme === "light" ? "bg-white border-slate-200 text-slate-700 hover:bg-slate-50" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"}`}
+                    >
+                      <X size={14} /> Hide All Widgets
+                    </button>}
+                    </div>
                   </div>
+                  <p className={`-mt-3 mb-5 text-xs ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
+                    The sidebar groups all modules in one place. Open independent floating widgets only when needed; use the menu bar icon to reopen this window or the sidebar.
+                  </p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {QUICK_LAUNCH_WIDGETS.map(({ field, color, detail }) => {
                       if (appConfig[field] === false) return null;

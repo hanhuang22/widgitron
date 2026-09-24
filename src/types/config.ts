@@ -30,6 +30,8 @@ export interface AppConfig {
   /** 1–10. Higher = hides sooner after the pointer leaves (default 8). */
   sidebar_hide_sensitivity?: number;
   active_widgets?: Record<string, boolean>;
+  language?: "zh-CN" | "en";
+  macos_setup_version?: number;
 }
 
 export interface SidebarTileLayoutConfig {

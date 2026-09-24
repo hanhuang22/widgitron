@@ -4,6 +4,7 @@ import type {
   SidebarThemeKind,
   SidebarThemePresetId as ConfigSidebarThemePresetId,
 } from "../types/config";
+import { isMacOS } from "./platform";
 
 export type SidebarThemePresetId = ConfigSidebarThemePresetId;
 
@@ -64,9 +65,9 @@ const LIGHT_THEME: ResolvedSidebarTheme = {
   gpu: "#2563eb",
   deadlines: "#7c3aed",
   arxiv: "#db2777",
-  background_opacity: 0.84,
-  header_opacity: 0.9,
-  card_opacity: 0.76,
+  background_opacity: isMacOS ? 0.96 : 0.84,
+  header_opacity: isMacOS ? 0.98 : 0.9,
+  card_opacity: isMacOS ? 0.94 : 0.76,
   blur: 18,
 };
 

@@ -317,6 +317,13 @@ async fn create_widget_impl_with_options(
     focus_window: bool,
 ) -> Result<(), String> {
     log::info!("Creating/Showing widget: {} ({})", title, id);
+    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    let keep_on_top = config
+        .always_on_top
+        .as_ref()
+        .and_then(|values| values.get(&id))
+        .copied()
+        .unwrap_or(cfg!(windows));
     let win = if let Some(win) = app.get_webview_window(&id) {
         win
     } else {
@@ -328,7 +335,7 @@ async fn create_widget_impl_with_options(
             .maximizable(false)
             .transparent(true)
             .shadow(false)
-            .always_on_top(true)
+            .always_on_top(keep_on_top)
             .skip_taskbar(true);
 
         match builder.build() {
@@ -345,9 +352,9 @@ async fn create_widget_impl_with_options(
     // native maximize capability enabled also opts them into Windows Aero
     // Snap, which can unexpectedly maximize a widget near a screen edge.
     let _ = win.set_maximizable(false);
+    let _ = win.set_always_on_top(keep_on_top);
 
-    if let Err(err) =
-        crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
+    if let Err(err) = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
     {
         log::error!(
             "Failed to restore widget layout for '{}' (window may keep bootstrap size 320x400): {}",
@@ -402,6 +409,17 @@ pub async fn close_widget(
         let _ = win.hide();
     }
     let _ = config_store::update_widget_visibility_config(&app, &id, false).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_all_widgets(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+) -> Result<(), String> {
+    for id in crate::widget_layout::TRACKED_WIDGET_IDS {
+        close_widget(app.clone(), state.clone(), id.to_string()).await?;
+    }
     Ok(())
 }
 

@@ -37,6 +37,8 @@ import {
 import { CACHED_LABELS, cachedLabelWhen, gpuRefreshCachedLabel } from "../utils/cachedLabels";
 import { ServiceErrorBanners } from "../components/ServiceErrorBanners";
 import { hexToRgba } from "../utils/color";
+import { isMacOS } from "../utils/platform";
+import { resolveLanguage } from "../utils/localization";
 import {
   clearLiveDataSectionErrors,
   createSectionRefreshHandler,
@@ -641,7 +643,7 @@ function QuotaItemCard({
             </div>
           )}
         </div>
-        <button
+        {(PROVIDER_AUTH[q.provider]?.apiKey || providerSupportsQuotaVisualizations(q.provider) || !PROVIDER_AUTH[q.provider]) && <button
           type="button"
           onClick={() => onOpenSettings(q.id)}
           title="Quota monitor settings"
@@ -652,7 +654,7 @@ function QuotaItemCard({
           }`}
         >
           <Settings size={14} />
-        </button>
+        </button>}
       </div>
     </Reorder.Item>
   );
@@ -1384,6 +1386,22 @@ export function SettingsPanel({
           appConfig.theme === "light" ? "bg-slate-50" : "bg-white/5"
         }`}
       >
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>Interface Language</div>
+            <p className="text-[10px] text-slate-400">Change the language in the dashboard, sidebar, and widgets.</p>
+          </div>
+          <div className="flex gap-1 rounded-xl border border-[var(--dashboard-border)] p-1">
+            {(["zh-CN", "en"] as const).map((language) => (
+              <button
+                key={language}
+                type="button"
+                onClick={() => onSaveApp({ ...appConfig, language })}
+                className={`rounded-lg px-3 py-1.5 text-[10px] font-bold ${resolveLanguage(appConfig.language) === language ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+              >{language === "zh-CN" ? "简体中文" : "English"}</button>
+            ))}
+          </div>
+        </div>
         <div className="flex items-center justify-between">
           <div className="space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
@@ -1480,7 +1498,7 @@ export function SettingsPanel({
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>
               Launch at Startup
             </div>
-            <p className="text-[10px] text-slate-400">Automatically start Widgitron when you log in to Windows.</p>
+            <p className="text-[10px] text-slate-400">Automatically start Widgitron when you log in.</p>
           </div>
           <button
             onClick={onToggleAutostart}
@@ -1615,7 +1633,7 @@ export function SettingsPanel({
               Dock Edge
             </div>
             <p className="text-[10px] text-slate-400">
-              Choose an edge here, or drag the sidebar header near any screen edge to snap it there.
+              {isMacOS ? "Choose the screen edge where the sidebar opens." : "Choose an edge here, or drag the sidebar header near any screen edge to snap it there."}
             </p>
           </div>
           <div className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${
@@ -1653,7 +1671,7 @@ export function SettingsPanel({
                   Pin Display
                 </div>
                 <p className="text-[9px] text-slate-400">
-                  Keep the sidebar pinned open instead of hiding when the pointer leaves.
+                  {isMacOS ? "Open the sidebar automatically when Widgitron starts." : "Keep the sidebar pinned open instead of hiding when the pointer leaves."}
                 </p>
               </div>
               <MasterSwitch
@@ -1661,7 +1679,7 @@ export function SettingsPanel({
                 onToggle={(enabled) => onSaveApp({ ...appConfig, sidebar_pinned: enabled })}
               />
             </div>
-            <div className="space-y-4 border-t border-[var(--dashboard-border)] px-3 py-3">
+            {!isMacOS && <div className="space-y-4 border-t border-[var(--dashboard-border)] px-3 py-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-1">
@@ -1730,8 +1748,8 @@ export function SettingsPanel({
                   aria-label="Sidebar hide sensitivity"
                 />
               </div>
-            </div>
-            <div className="space-y-3 border-t border-[var(--dashboard-border)] px-3 py-3">
+            </div>}
+            {!isMacOS && <div className="space-y-3 border-t border-[var(--dashboard-border)] px-3 py-3">
               <div className="space-y-1">
                 <div className={`text-[10px] font-black uppercase tracking-wider ${
                   appConfig.theme === "light" ? "text-slate-700" : "text-slate-300"
@@ -1816,7 +1834,7 @@ export function SettingsPanel({
                   {sidebarHotkeyCaptureError}
                 </p>
               )}
-            </div>
+            </div>}
           </div>
         </div>
 

@@ -102,6 +102,7 @@ export interface TauriCommandMap {
   download_and_install_update: void;
   create_widget: void;
   close_widget: void;
+  hide_all_widgets: void;
   restore_widget_position: void;
   open_log_dir: void;
   open_config_dir: void;
@@ -157,6 +158,7 @@ export const TAURI_COMMAND_NAMES = [
   "download_and_install_update",
   "create_widget",
   "close_widget",
+  "hide_all_widgets",
   "restore_widget_position",
   "open_log_dir",
   "open_config_dir",
@@ -232,6 +234,7 @@ export interface TauriCommandArgs {
     error?: string;
   };
   show_main: undefined;
+  hide_all_widgets: undefined;
   show_sidebar: undefined;
   hide_sidebar: undefined;
   toggle_sidebar: undefined;

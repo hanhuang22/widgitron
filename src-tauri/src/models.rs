@@ -130,6 +130,10 @@ pub struct AppConfig {
     /// 1–10. Higher = hides sooner after the pointer leaves (default 8, current feel).
     pub sidebar_hide_sensitivity: Option<u8>,
     pub active_widgets: Option<HashMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos_setup_version: Option<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -267,9 +271,17 @@ impl Default for AppConfig {
                 gpu: Some("#2563eb".into()),
                 deadlines: Some("#7c3aed".into()),
                 arxiv: Some("#db2777".into()),
-                background_opacity: Some(0.84),
-                header_opacity: Some(0.9),
-                card_opacity: Some(0.76),
+                background_opacity: Some(if cfg!(target_os = "macos") {
+                    0.96
+                } else {
+                    0.84
+                }),
+                header_opacity: Some(if cfg!(target_os = "macos") { 0.98 } else { 0.9 }),
+                card_opacity: Some(if cfg!(target_os = "macos") {
+                    0.94
+                } else {
+                    0.76
+                }),
                 blur: Some(18.0),
             }),
             sidebar_width: Some(320.0),
@@ -287,6 +299,8 @@ impl Default for AppConfig {
             sidebar_reveal_sensitivity: Some(crate::sidebar_dock::DEFAULT_REVEAL_SENSITIVITY),
             sidebar_hide_sensitivity: Some(crate::sidebar_dock::DEFAULT_HIDE_SENSITIVITY),
             active_widgets: Some(HashMap::new()),
+            language: None,
+            macos_setup_version: None,
         }
     }
 }
@@ -696,7 +710,7 @@ impl Default for WidgetThemeConfig {
             name: "Arxiv Radar Default".into(),
             is_default: true,
             bg_color: "#0f172a".into(),
-            bg_opacity: 0.8,
+            bg_opacity: if cfg!(target_os = "macos") { 0.95 } else { 0.8 },
             text_colors: vec![
                 ColorConfig {
                     name: "Main Text".into(),
@@ -827,19 +841,17 @@ impl Default for WidgetThemeConfig {
         };
 
         let mut assignments = HashMap::new();
-        assignments.insert("widget-gpu-default".into(), "theme-gpu-transparent".into());
-        assignments.insert(
-            "widget-deadlines-default".into(),
-            "theme-deadline-transparent".into(),
-        );
-        assignments.insert(
-            "widget-arxiv-default".into(),
-            "theme-arxiv-transparent".into(),
-        );
-        assignments.insert(
-            "widget-quota-default".into(),
-            "theme-quota-transparent".into(),
-        );
+        let preset = |kind: &str| {
+            if cfg!(target_os = "macos") {
+                format!("theme-{kind}-default")
+            } else {
+                format!("theme-{kind}-transparent")
+            }
+        };
+        assignments.insert("widget-gpu-default".into(), preset("gpu"));
+        assignments.insert("widget-deadlines-default".into(), preset("deadline"));
+        assignments.insert("widget-arxiv-default".into(), preset("arxiv"));
+        assignments.insert("widget-quota-default".into(), preset("quota"));
 
         Self {
             themes: vec![
