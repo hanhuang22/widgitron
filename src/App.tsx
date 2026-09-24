@@ -13,6 +13,7 @@ import {
   Bell,
   Pin,
   PinOff,
+  Monitor,
   Trophy,
   Copy,
   ExternalLink,
@@ -433,6 +434,7 @@ function App() {
   const [windowLabel, setWindowLabel] = useState("");
   const [isLocked, setIsLocked] = useState(!isMacOS);
   const [isPinned, setIsPinned] = useState(false);
+  const [isDesktopFixed, setIsDesktopFixed] = useState(false);
   const [gpuData, setGpuData] = useState<ServerGpuData[]>([]);
   const [deadlines, setDeadlines] = useState<PaperDeadlineInfo[]>([]);
   const [gpuConfig, setGpuConfig] = useState<GpuConfig>({ servers: [] });
@@ -743,18 +745,21 @@ function App() {
 
           const pinned = ac.always_on_top?.[label] ?? false;
           setIsPinned(pinned);
+          setIsDesktopFixed(ac.embedded?.[label] ?? false);
 
-          const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
-          setTimeout(async () => {
-            if (!active) return;
-            if (pinned) {
-              await win.setAlwaysOnTop(true);
-              await tauriInvoke("set_desktop_mode", { label, enabled: false });
-            } else {
-              await win.setAlwaysOnTop(false);
-              await tauriInvoke("set_desktop_mode", { label, enabled: true });
-            }
-          }, stagger);
+          if (!isMacOS) {
+            const stagger = WIDGET_DESKTOP_STAGGER_MS[label] ?? 500;
+            setTimeout(async () => {
+              if (!active) return;
+              if (pinned) {
+                await win.setAlwaysOnTop(true);
+                await tauriInvoke("set_desktop_mode", { label, enabled: false });
+              } else {
+                await win.setAlwaysOnTop(false);
+                await tauriInvoke("set_desktop_mode", { label, enabled: true });
+              }
+            }, stagger);
+          }
 
           const uTheme = await tauriListen("theme_update", (event) => {
             if (!active) return;
@@ -768,6 +773,7 @@ function App() {
             const nextConfig = event.payload;
             setAppConfig(nextConfig);
             setIsPinned(nextConfig.always_on_top?.[label] ?? false);
+            setIsDesktopFixed(nextConfig.embedded?.[label] ?? false);
           });
           unlisteners.push(() => uAppConfig());
           return;
@@ -1288,7 +1294,7 @@ function App() {
 
     // When unlocking, we MUST exit desktop mode to allow movement
     // When locking, if we are NOT pinned, we re-enter desktop mode
-    if (windowLabel.startsWith("widget-")) {
+    if (windowLabel.startsWith("widget-") && !isMacOS) {
       if (!nextLocked) {
         // Unlocking: Exit desktop mode
         await tauriInvoke("set_desktop_mode", { label: windowLabel, enabled: false });
@@ -1307,16 +1313,15 @@ function App() {
       const currentVal = targetLabel === windowLabel ? isPinned : appConfig.always_on_top?.[targetLabel] || false;
       const next = !currentVal;
 
-      const targetWin = targetLabel === windowLabel ? appWindow : await WebviewWindow.getByLabel(targetLabel);
-
-      if (next) {
-        // Turning ON Always on Top: Disable Desktop Mode FIRST, then set top
-        await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: false });
-        await targetWin?.setAlwaysOnTop(true);
-      } else {
-        // Turning OFF Always on Top: Enable Desktop Mode (Embedded)
-        await targetWin?.setAlwaysOnTop(false);
-        await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: true });
+      if (!isMacOS) {
+        const targetWin = targetLabel === windowLabel ? appWindow : await WebviewWindow.getByLabel(targetLabel);
+        if (next) {
+          await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: false });
+          await targetWin?.setAlwaysOnTop(true);
+        } else {
+          await targetWin?.setAlwaysOnTop(false);
+          await tauriInvoke("set_desktop_mode", { label: targetLabel, enabled: true });
+        }
       }
 
       const nextConfig = await tauriInvoke("set_widget_always_on_top", {
@@ -1329,6 +1334,29 @@ function App() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const toggleDesktopFixed = async (labelToToggle?: string, title?: string) => {
+    const targetLabel = labelToToggle || windowLabel;
+    const currentlyFixed = targetLabel === windowLabel
+      ? isDesktopFixed
+      : appConfig.embedded?.[targetLabel] ?? false;
+    const fixed = !currentlyFixed;
+    try {
+      const nextConfig = await tauriInvoke("set_widget_desktop_fixed", {
+        label: targetLabel,
+        fixed,
+      });
+      setAppConfig(nextConfig);
+      if (targetLabel === windowLabel) setIsDesktopFixed(fixed);
+      if (fixed && !activeWidgets.includes(targetLabel) && title) {
+        await tauriInvoke("create_widget", { id: targetLabel, title });
+        setActiveWidgets((previous) => [...new Set([...previous, targetLabel])]);
+      }
+    } catch (error) {
+      console.error("Failed to change desktop mode", error);
+      setToggleWidgetError(formatWidgetToggleError(String(error)));
     }
   };
 
@@ -2114,6 +2142,16 @@ function App() {
           >
             {isPinned ? <Pin size={12} /> : <PinOff size={12} />}
           </button>
+          {isMacOS && <button
+            data-no-drag="true"
+            onClick={() => toggleDesktopFixed()}
+            className={`w-7 h-7 flex items-center justify-center rounded-md bg-black/60 border border-white/10 ${
+              isDesktopFixed ? "text-blue-400" : "text-white/70"
+            } hover:text-white transition-all shadow-lg backdrop-blur-md`}
+            title={isDesktopFixed ? "Return to floating window" : "Fix on Desktop"}
+          >
+            <Monitor size={12} />
+          </button>}
           <button
             data-no-drag="true"
             onClick={handleClose}
@@ -2396,6 +2434,8 @@ function App() {
                           loading={pendingToggles.has(id)}
                           disabled={pendingToggles.has(id)}
                           onLaunch={() => handleToggleWidget(id, title)}
+                          desktopFixed={isMacOS ? appConfig.embedded?.[id] ?? false : undefined}
+                          onToggleDesktop={isMacOS ? () => toggleDesktopFixed(id, title) : undefined}
                         />
                       );
                     })}

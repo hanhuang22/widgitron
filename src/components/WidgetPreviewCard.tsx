@@ -1,4 +1,4 @@
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2, Monitor } from "lucide-react";
 
 interface WidgetPreviewCardProps {
   title: string;
@@ -10,6 +10,8 @@ interface WidgetPreviewCardProps {
   loading?: boolean;
   disabled?: boolean;
   onLaunch: () => void;
+  desktopFixed?: boolean;
+  onToggleDesktop?: () => void;
 }
 
 export function WidgetPreviewCard({
@@ -21,7 +23,9 @@ export function WidgetPreviewCard({
   theme = "dark",
   loading = false,
   disabled = false,
-  onLaunch
+  onLaunch,
+  desktopFixed,
+  onToggleDesktop,
 }: WidgetPreviewCardProps) {
   const isLight = theme === "light";
   const isActive = status === "Active";
@@ -82,7 +86,23 @@ export function WidgetPreviewCard({
           {loading && <Loader2 size={12} className="animate-spin" />}
           {trend}
         </button>
-        <div
+        {onToggleDesktop && <button
+          type="button"
+          disabled={isDisabled}
+          onClick={(event) => { event.stopPropagation(); onToggleDesktop(); }}
+          title={desktopFixed ? "Return to floating window" : "Fix on Desktop"}
+          className={`ml-2 flex items-center gap-1 rounded-lg border px-2 py-2 text-[10px] font-semibold transition-colors ${
+            desktopFixed
+              ? "border-blue-500/40 bg-blue-500/15 text-blue-500"
+              : isLight
+                ? "border-slate-200 text-slate-600 hover:bg-slate-100"
+                : "border-white/10 text-slate-300 hover:bg-white/10"
+          }`}
+        >
+          <Monitor size={12} />
+          {desktopFixed ? "On Desktop" : "Desktop"}
+        </button>}
+        {!onToggleDesktop && <div
           className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
             isLight
               ? isActive
@@ -98,7 +118,7 @@ export function WidgetPreviewCard({
           ) : (
             <ChevronRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
           )}
-        </div>
+        </div>}
       </div>
     </div>
   );

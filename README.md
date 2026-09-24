@@ -96,8 +96,10 @@ pinned widgets stay open), and legacy transparent widget themes switch to
 readable presets. Later user choices are retained.
 
 Windows-only edge reveal and global hotkey are not available on macOS.
-Desktop embedding is Windows-only; macOS widgets remain regular windows and
-can optionally be kept above other windows.
+For each macOS widget, choose **Fix on Desktop** in its controls or on the
+dashboard to keep it with the desktop when using Show Desktop. **Keep above
+other windows** switches it back to a floating window. The desktop mode uses
+the existing live widget window; it is not a WidgetKit extension.
 When a macOS update is available, the app opens its disk image for manual installation.
 
 ## 🤝 Contributing

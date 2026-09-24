@@ -158,6 +158,8 @@ const ZH: Record<string, string> = {
   "Resize widget": "调整浮窗大小",
   "Lock position": "锁定位置", "Keep above other windows": "置于其他窗口之上",
   "Keep in normal window order": "恢复普通窗口层级", "Hide widget": "隐藏浮窗",
+  "Fix on Desktop": "固定到桌面", "Desktop": "桌面", "On Desktop": "已固定到桌面",
+  "Return to floating window": "恢复浮窗",
 };
 
 function translated(source: string): string {

@@ -85,6 +85,7 @@ pub fn run() {
             commands::get_app_config,
             commands::save_app_config,
             commands::set_widget_always_on_top,
+            commands::set_widget_desktop_fixed,
             commands::get_deadlines,
             commands::refresh_paper_deadlines,
             commands::get_gpu_data,

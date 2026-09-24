@@ -32,8 +32,14 @@ Widgitron has three surfaces:
   independent widgets, and quitting. It remains an entry point when the main
   window is closed.
 - Independent widgets start as normal movable windows. Their move lock, keep
-  above other windows, and hide buttons are visible without hover. The lower
-  right corner provides a visible resize handle.
+  above other windows, desktop fixation, and hide buttons are visible without
+  hover. The lower right corner provides a visible resize handle. The dashboard
+  also has a desktop fixation control, so a widget can be returned to normal
+  window order even when another app covers it.
+- Desktop-fixed widgets use an AppKit window below Finder desktop icons and
+  stay on all Spaces. They are intended to remain visible during macOS Show
+  Desktop. This setting persists per widget, independently of the move lock.
+  Turning on always-on-top returns that widget to floating mode.
 - The portable macOS sidebar stays open when focus moves to another window;
   it closes explicitly. **Pin Display** controls whether it also opens on the
   next launch. Its edge is selected in Settings. Edge reveal and drag-to-dock
@@ -43,7 +49,7 @@ Widgitron has three surfaces:
 
 ## Boundaries
 
-macOS does not embed widgets into the desktop wallpaper layer. The update
-installer opens a disk image for manual installation. Widget and sidebar
-windows still use the existing custom frameless design; a native titlebar
-redesign is separate from this display behavior change.
+Desktop fixation uses the existing live window at desktop level. It is not a
+WidgetKit extension and does not appear in the macOS widget gallery. The
+update installer opens a disk image for manual installation. Widget and
+sidebar windows still use the existing custom frameless design.
