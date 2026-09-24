@@ -77,10 +77,12 @@ pnpm tauri build
 
 ### macOS build
 
-Install the Xcode Command Line Tools, Node.js, and pnpm, then run the commands
-above. The Rust build compiles its own OpenSSL for SSH support, so a separate
-Homebrew OpenSSL installation is not required. The generated app and disk image
-are under `src-tauri/target/release/bundle/`.
+Install the Xcode Command Line Tools, Node.js, and pnpm, then run
+`pnpm macos:build`. This builds the Tauri app and embeds the native WidgetKit
+quota extension. The Rust build compiles its own OpenSSL for SSH support, so a
+separate Homebrew OpenSSL installation is not required. The local app is under
+`src-tauri/target/release/bundle/macos/`. The build script uses ad-hoc signing;
+distribution requires a matching Apple signing identity and App Group capability.
 
 On macOS, Widgitron starts with the main dashboard. Open the sidebar from the
 dashboard's **Open Sidebar** button or the menu bar icon. The sidebar stays
@@ -92,14 +94,18 @@ The menu bar icon also reopens the dashboard and hides all floating widgets.
 The macOS default is Simplified Chinese; change it in **Settings → General →
 Interface Language**. Existing macOS profiles receive a one-time display
 migration: the legacy four-widget auto-open layout is cleared (explicitly
-pinned widgets stay open), and legacy transparent widget themes switch to
-readable presets. Later user choices are retained.
+pinned widgets stay open), and overly transparent widget themes switch to
+readable light presets. Mixed and custom theme choices are retained.
 
 Windows-only edge reveal and global hotkey are not available on macOS.
 For each macOS widget, choose **Fix on Desktop** in its controls or on the
 dashboard to keep it with the desktop when using Show Desktop. **Keep above
 other windows** switches it back to a floating window. The desktop mode uses
 the existing live widget window; it is not a WidgetKit extension.
+The native quota widget is separate: right-click the desktop, choose **Edit
+Widgets**, and search for **Widgitron**. It reads a display-only snapshot shared
+by the app; WidgetKit decides when to refresh it. Launch the app once after
+installing it so the widget appears in the gallery.
 When a macOS update is available, the app opens its disk image for manual installation.
 
 ## 🤝 Contributing

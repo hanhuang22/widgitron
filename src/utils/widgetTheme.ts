@@ -4,10 +4,10 @@ import { isMacOS } from "./platform";
 export type WidgetThemeKind = "gpu" | "deadline" | "arxiv" | "quota";
 
 export const DEFAULT_THEME_IDS: Record<WidgetThemeKind, string> = {
-  gpu: isMacOS ? "theme-gpu-default" : "theme-gpu-transparent",
-  deadline: isMacOS ? "theme-deadline-default" : "theme-deadline-transparent",
-  arxiv: isMacOS ? "theme-arxiv-default" : "theme-arxiv-transparent",
-  quota: isMacOS ? "theme-quota-default" : "theme-quota-transparent",
+  gpu: isMacOS ? "theme-gpu-light" : "theme-gpu-transparent",
+  deadline: isMacOS ? "theme-deadline-light" : "theme-deadline-transparent",
+  arxiv: isMacOS ? "theme-arxiv-light" : "theme-arxiv-transparent",
+  quota: isMacOS ? "theme-quota-light" : "theme-quota-transparent",
 };
 
 const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
@@ -17,11 +17,11 @@ const SIDEBAR_THEME_IDS: Record<WidgetThemeKind, string> = {
   quota: "theme-quota-default",
 };
 
-export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly [string, string]> = {
-  gpu: ["theme-gpu-default", "theme-gpu-transparent"],
-  deadline: ["theme-deadline-default", "theme-deadline-transparent"],
-  arxiv: ["theme-arxiv-default", "theme-arxiv-transparent"],
-  quota: ["theme-quota-default", "theme-quota-transparent"],
+export const PRESET_THEME_IDS: Record<WidgetThemeKind, readonly string[]> = {
+  gpu: ["theme-gpu-default", "theme-gpu-light", "theme-gpu-transparent"],
+  deadline: ["theme-deadline-default", "theme-deadline-light", "theme-deadline-transparent"],
+  arxiv: ["theme-arxiv-default", "theme-arxiv-light", "theme-arxiv-transparent"],
+  quota: ["theme-quota-default", "theme-quota-light", "theme-quota-transparent"],
 };
 
 export function widgetThemeKindFromLabel(label: string): WidgetThemeKind {

@@ -123,6 +123,13 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     }
 
     config_store::write_config(&app, "app_config.json", &config)?;
+    #[cfg(target_os = "macos")]
+    if previous.language != config.language {
+        let quota_config = crate::quota::read_quota_config(&app);
+        if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(&app, &quota_config) {
+            log::warn!("Failed to update macOS quota widget language: {error}");
+        }
+    }
     crate::sidebar_hotkey::update_global_sidebar_hotkey(config.sidebar_hotkey.clone());
     if scale_changed {
         crate::widget_layout::apply_scale_to_open_widgets(&app, next_scale);

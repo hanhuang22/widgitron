@@ -2328,7 +2328,7 @@ function App() {
             dismissed={serviceToggleErrorDismissed}
             onDismiss={() => setServiceToggleErrorDismissed(true)}
           />
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {activeTab === "dashboard" && (
               <motion.div
                 key="dashboard"
@@ -2418,6 +2418,11 @@ function App() {
                   <p className={`-mt-3 mb-5 text-xs ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
                     The sidebar groups all modules in one place. Open independent floating widgets only when needed; use the menu bar icon to reopen this window or the sidebar.
                   </p>
+                  {isMacOS && (
+                    <p className={`-mt-3 mb-5 text-xs ${appConfig.theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
+                      To add the native quota widget, right-click the desktop, choose Edit Widgets, and search Widgitron. macOS controls its refresh schedule.
+                    </p>
+                  )}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {QUICK_LAUNCH_WIDGETS.map(({ field, color, detail }) => {
                       if (appConfig[field] === false) return null;
@@ -2844,7 +2849,7 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Latest ({arxivPapers.length})
+                        {`Latest (${arxivPapers.length})`}
                       </button>
                       <button
                         onClick={() => setArxivView("saved")}
@@ -2856,7 +2861,7 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Saved ({arxivSavedPapers.length})
+                        {`Saved (${arxivSavedPapers.length})`}
                       </button>
                       <button
                         onClick={() => setArxivView("discarded")}
@@ -2868,7 +2873,7 @@ function App() {
                             : "text-slate-500 hover:text-slate-400"
                         }`}
                       >
-                        Discarded ({arxivDiscardedPapers.length})
+                        {`Discarded (${arxivDiscardedPapers.length})`}
                       </button>
                     </div>
                   </div>

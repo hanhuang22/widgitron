@@ -1387,17 +1387,17 @@ export function SettingsPanel({
         }`}
       >
         <div className="flex items-center justify-between gap-4">
-          <div className="space-y-1">
+          <div className="min-w-0 flex-1 space-y-1">
             <div className={`text-xs font-bold ${appConfig.theme === "light" ? "text-slate-900" : "text-white"}`}>Interface Language</div>
             <p className="text-[10px] text-slate-400">Change the language in the dashboard, sidebar, and widgets.</p>
           </div>
-          <div className="flex gap-1 rounded-xl border border-[var(--dashboard-border)] p-1">
+          <div className="flex shrink-0 gap-1 rounded-xl border border-[var(--dashboard-border)] p-1">
             {(["zh-CN", "en"] as const).map((language) => (
               <button
                 key={language}
                 type="button"
                 onClick={() => onSaveApp({ ...appConfig, language })}
-                className={`rounded-lg px-3 py-1.5 text-[10px] font-bold ${resolveLanguage(appConfig.language) === language ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
+                className={`min-w-[72px] whitespace-nowrap rounded-lg px-3 py-1.5 text-center text-[10px] font-bold leading-tight ${resolveLanguage(appConfig.language) === language ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}
               >{language === "zh-CN" ? "简体中文" : "English"}</button>
             ))}
           </div>
@@ -2906,7 +2906,7 @@ export function SettingsPanel({
 
           {!updateError && !updateCheckError && updateInfo && !updateInfo.has_update && !isCheckingUpdate && (
             <div className="text-[10px] text-slate-500 font-medium">
-              You are on the latest version ({updateInfo.current_version}).
+              {`You are on the latest version (${updateInfo.current_version}).`}
             </div>
           )}
 

@@ -22,6 +22,7 @@ const ZH: Record<string, string> = {
   "Interface Language": "界面语言",
   "Change the language in the dashboard, sidebar, and widgets.": "切换主界面、侧边栏和浮窗的显示语言。",
   "The sidebar groups all modules in one place. Open independent floating widgets only when needed; use the menu bar icon to reopen this window or the sidebar.": "侧边栏集中显示各模块；需要时再打开独立浮窗。菜单栏图标可以重新打开主界面或侧边栏。",
+  "To add the native quota widget, right-click the desktop, choose Edit Widgets, and search Widgitron. macOS controls its refresh schedule.": "添加系统额度小组件：右键点击桌面，选择“编辑小组件”，搜索 Widgitron。刷新时间由 macOS 安排。",
   "Track AI agent & API limits on your desktop": "在桌面查看 AI Agent 与 API 额度",
   "Floating desktop monitoring for GPU clusters": "在桌面监控 GPU 集群",
   "Track conference deadlines on your desktop": "在桌面查看会议截止日期",
@@ -160,13 +161,60 @@ const ZH: Record<string, string> = {
   "Keep in normal window order": "恢复普通窗口层级", "Hide widget": "隐藏浮窗",
   "Fix on Desktop": "固定到桌面", "Desktop": "桌面", "On Desktop": "已固定到桌面",
   "Return to floating window": "恢复浮窗",
+  "GPU Light": "GPU 浅色", "Deadline Light": "截止日期浅色",
+  "Arxiv Radar Light": "arXiv 浅色", "Quota Light": "额度浅色",
+  "Categories": "研究领域", "Graphics": "图形学", "Security": "安全", "Network": "网络", "Systems": "系统",
+  "Deadline (UTC)": "截止时间（UTC）", "GPUs Detected": "检测到的 GPU",
+  "Job:": "任务：", "JOB:": "任务：", "jobs": "个任务", "papers": "篇论文",
+  "Load": "负载", "Move": "移动", "Name": "名称", "JSON Path": "JSON 路径",
+  "Last Update:": "上次更新：", "Reset:": "重置：", "Never": "从未更新",
+  "% remaining": "% 剩余", "used": "已使用", "Server #": "服务器 #",
+  "No new papers. Adjust keywords in Settings or wait for update.": "暂无新论文，可在设置中调整关键词或等待更新。",
+  "No saved papers yet. Swipe right on the widget to save!": "还没有收藏论文，在浮窗中向右滑动即可收藏。",
+  "No discarded papers. Swipe left on the widget to discard.": "还没有忽略的论文，在浮窗中向左滑动即可忽略。",
+  "Pin this deadline to widget": "将该截止日期固定到浮窗",
+  "Unpin this deadline from widget": "从浮窗取消固定该截止日期",
+  "Subscribe conference": "关注会议", "Unsubscribe conference": "取消关注会议",
+  "Non CCF": "非 CCF", "Non Core": "非 CORE", "Non CORE": "非 CORE",
+  "Optional charts for this monitor — heatmap, daily bars, and model breakdown. Enabling these may slow quota refresh slightly.": "可选额度图表：活跃热力图、每日柱状图和模型明细。启用后额度刷新可能略慢。",
+  "Calendar heatmap": "日历热力图", "GitHub-style 12-week activity grid": "过去 12 周的活跃热力图",
+  "Daily bars": "每日柱状图", "Last 14 days as mini bar chart": "过去 14 天的迷你柱状图",
+  "Model breakdown": "模型明细", "Top models by cost or tokens": "按花费或 Token 显示主要模型",
+  "Heatmap metric": "热力图指标", "Bars metric": "柱状图指标",
+  "Model breakdown metric": "模型明细指标", "Queries": "请求数", "Tokens": "Token 数",
+  "Daily queries": "每日请求数", "Daily tokens": "每日 Token 数",
+  "By model ($)": "各模型花费（$）", "By model (tokens)": "各模型 Token 用量",
+  "Host can be an SSH config alias; OpenSSH resolved HostName, User, Port and IdentityFile are applied.": "主机可以是 SSH 配置中的别名；会使用 OpenSSH 解析出的主机名、用户名、端口和密钥文件。",
+  "Show 8 GPUs per row with full progress indicator backgrounds, vertical stacked labels, hiding index numbers.": "每行显示 8 张 GPU，以完整进度背景和纵向标签呈现，并隐藏序号。",
+  "Sidebar hide sensitivity": "侧边栏收起灵敏度", "Sidebar reveal sensitivity": "侧边栏唤出灵敏度",
+  "Some config files could not be parsed and were renamed with a": "部分配置文件无法解析，已重命名并添加",
+  "suffix. Widgitron is using defaults until you fix or remove them.": "后缀。修复或移除这些文件前，Widgitron 会使用默认配置。",
+  "Check your network connection or try again later. You can also download updates manually from GitHub Releases.": "请检查网络连接或稍后重试；也可以到 GitHub Releases 手动下载更新。",
+  "Check Now": "立即检查", "Checking...": "检查中…",
+  "Check to see if updates are available.": "检查是否有可用更新。",
+  "Your software is up to date.": "当前已是最新版本。",
+  "Update Available:": "发现新版本：", "Current version:": "当前版本：",
+  "Release Notes:": "更新说明：", "Engine": "技术栈", "Developer": "开发者",
+  "Stable": "稳定版", "System Preset:": "系统预设：", "Used by:": "使用此主题：",
+  "Widgitron is a modular desktop widget framework designed for researchers and developers. It is completely free and open-source, available at": "Widgitron 是面向研究人员和开发者的模块化桌面浮窗工具，免费开源。项目地址：",
+  "Antigravity IDE not running — launch it to refresh quota locally.": "Antigravity IDE 未运行；启动后即可在本地刷新额度。",
+  "Antigravity IDE not running — launch it, or add": "Antigravity IDE 未运行；请启动它，或添加",
+  "Antigravity not ready — sign in via the IDE or configure OAuth at": "Antigravity 尚未就绪；请在 IDE 中登录，或在以下路径配置 OAuth：",
+  "Click +/- to adjust by 1": "点击 +/− 每次调整 1",
+  "Double click to edit value": "双击编辑数值",
+  "Exit": "退出", "Dismiss": "关闭",
+  "Assign": "分配", "Custom": "自定义", "Usage": "用量",
+  "Dock target ready": "已到达停靠位置", "Moving sidebar": "正在移动侧边栏",
+  "Unknown Author": "未知作者", "SYSTEM": "系统",
+  "Your editable sidebar theme.": "你可以编辑的侧边栏主题。",
 };
 
 function translated(source: string): string {
   const whitespace = source.match(/^(\s*)([\s\S]*?)(\s*)$/);
   if (!whitespace) return source;
   const [, before, core, after] = whitespace;
-  if (ZH[core]) return before + ZH[core] + after;
+  const normalized = core.replace(/\s+/g, " ").trim();
+  if (ZH[normalized]) return before + ZH[normalized] + after;
   const count = core.match(/^(Latest|Saved|Discarded) \((\d+)\)$/);
   if (count) return `${before}${ZH[count[1]]} (${count[2]})${after}`;
   const online = core.match(/^(\d+)\/(\d+) servers online$/i);
@@ -177,6 +225,8 @@ function translated(source: string): string {
   if (errors) return `${before}${errors[1]} 项更新失败${after}`;
   const backoff = core.match(/^Backing off (\d+)s$/i);
   if (backoff) return `${before}${backoff[1]} 秒后重试${after}`;
+  const latestVersion = normalized.match(/^You are on the latest version \(([^)]+)\)\.$/);
+  if (latestVersion) return `${before}当前已是最新版本（${latestVersion[1]}）。${after}`;
   return source;
 }
 

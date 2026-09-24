@@ -129,7 +129,12 @@ pub fn read_quota_config(app: &AppHandle) -> QuotaConfig {
 pub fn write_quota_config(app: &AppHandle, config: &QuotaConfig) -> Result<(), String> {
     let mut disk_config = config.clone();
     encrypt_quota_config_secrets(&mut disk_config)?;
-    config_store::write_config(app, "quota_config.json", &disk_config)
+    config_store::write_config(app, "quota_config.json", &disk_config)?;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(app, config) {
+        log::warn!("Failed to publish macOS quota widget snapshot: {error}");
+    }
+    Ok(())
 }
 
 fn encrypt_quota_config_secrets(config: &mut QuotaConfig) -> Result<(), String> {

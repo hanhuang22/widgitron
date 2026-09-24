@@ -33,6 +33,8 @@ mod gpu;
 mod logger;
 #[cfg(target_os = "macos")]
 mod macos_setup;
+#[cfg(target_os = "macos")]
+mod macos_widget_snapshot;
 mod models;
 mod ota;
 mod quota;
@@ -143,6 +145,10 @@ pub fn run() {
             // Pre-load cached quota data from disk for instant widget display
             let cached_quota_items: Vec<models::QuotaItem> = {
                 let mut cfg = quota::read_quota_config(&handle);
+                #[cfg(target_os = "macos")]
+                if let Err(error) = macos_widget_snapshot::publish_quota_snapshot(&handle, &cfg) {
+                    log::warn!("Failed to publish macOS quota widget snapshot: {error}");
+                }
                 for item in &mut cfg.items {
                     if item.provider == "antigravity" {
                         quota::group_antigravity_bars(item);

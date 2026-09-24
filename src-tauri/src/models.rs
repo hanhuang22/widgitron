@@ -840,10 +840,24 @@ impl Default for WidgetThemeConfig {
             widget_scope: None,
         };
 
+        // A readable light surface for macOS independent widgets. Keep the
+        // dark and transparent presets available as explicit user choices.
+        let light_theme = |source: &WidgetTheme, name: &str| {
+            let mut theme = source.clone();
+            theme.id = source.id.replace("-transparent", "-light");
+            theme.name = name.into();
+            theme.bg_opacity = 0.94;
+            theme
+        };
+        let gpu_light = light_theme(&gpu_transparent, "GPU Light");
+        let deadline_light = light_theme(&deadline_transparent, "Deadline Light");
+        let arxiv_light = light_theme(&arxiv_transparent, "Arxiv Radar Light");
+        let quota_light = light_theme(&quota_transparent, "Quota Light");
+
         let mut assignments = HashMap::new();
         let preset = |kind: &str| {
             if cfg!(target_os = "macos") {
-                format!("theme-{kind}-default")
+                format!("theme-{kind}-light")
             } else {
                 format!("theme-{kind}-transparent")
             }
@@ -859,6 +873,10 @@ impl Default for WidgetThemeConfig {
                 deadline_default,
                 arxiv_default,
                 quota_default,
+                gpu_light,
+                deadline_light,
+                arxiv_light,
+                quota_light,
                 gpu_transparent,
                 deadline_transparent,
                 arxiv_transparent,
