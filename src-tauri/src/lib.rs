@@ -36,7 +36,15 @@ mod ota;
 mod quota;
 mod quota_analytics;
 mod secrets;
+#[cfg(windows)]
 mod sidebar_dock;
+#[cfg(not(windows))]
+#[path = "sidebar_dock_portable.rs"]
+mod sidebar_dock;
+#[cfg(windows)]
+mod sidebar_hotkey;
+#[cfg(not(windows))]
+#[path = "sidebar_hotkey_portable.rs"]
 mod sidebar_hotkey;
 mod sqlite_state;
 mod ui_scale;
@@ -177,18 +185,11 @@ pub fn run() {
                     match event {
                         TrayIconEvent::Click {
                             button: MouseButton::Right,
+                            position,
                             ..
                         } => {
                             if let Some(window) = tray.app_handle().get_webview_window("tray-menu")
                             {
-                                // Get cursor position to place the menu
-                                use windows::Win32::Foundation::POINT;
-                                use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                                let mut pt = POINT::default();
-                                unsafe {
-                                    let _ = GetCursorPos(&mut pt);
-                                }
-
                                 // Find the scale factor of the monitor containing the cursor position
                                 let mut scale_factor = 1.0;
                                 let mut monitor_pos = tauri::PhysicalPosition::<i32>::new(0, 0);
@@ -199,8 +200,8 @@ pub fn run() {
                                     for m in &monitors {
                                         let pos = m.position();
                                         let size = m.size();
-                                        let x = pt.x;
-                                        let y = pt.y;
+                                        let x = position.x as i32;
+                                        let y = position.y as i32;
                                         if x >= pos.x
                                             && x < pos.x + size.width as i32
                                             && y >= pos.y
@@ -228,7 +229,7 @@ pub fn run() {
                                 let physical_height = (104.0 * scale_factor) as i32;
 
                                 // Adjust X so the window doesn't overflow the right edge of the monitor
-                                let mut x = pt.x;
+                                let mut x = position.x as i32;
                                 if x + physical_width > monitor_pos.x + monitor_size.width as i32 {
                                     x = monitor_pos.x + monitor_size.width as i32 - physical_width;
                                 }
@@ -237,7 +238,7 @@ pub fn run() {
                                 }
 
                                 // Adjust Y so the window doesn't overflow the bottom or top of the monitor
-                                let mut y = pt.y - physical_height;
+                                let mut y = position.y as i32 - physical_height;
                                 if y + physical_height > monitor_pos.y + monitor_size.height as i32
                                 {
                                     y = monitor_pos.y + monitor_size.height as i32

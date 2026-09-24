@@ -75,6 +75,18 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+### macOS build
+
+Install the Xcode Command Line Tools, Node.js, and pnpm, then run the commands
+above. The Rust build compiles its own OpenSSL for SSH support, so a separate
+Homebrew OpenSSL installation is not required. The generated app and disk image
+are under `src-tauri/target/release/bundle/`.
+
+The macOS sidebar supports tray access, positioning, pinning, and hiding. Its
+Windows-only edge reveal and global hotkey are not available on macOS yet.
+Desktop embedding is also Windows-only; on macOS widgets remain regular windows.
+When a macOS update is available, the app opens its disk image for manual installation.
+
 ## 🤝 Contributing
 
 Contributions welcome! Here's how:
