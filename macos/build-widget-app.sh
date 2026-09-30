@@ -25,7 +25,7 @@ if [[ -z "$identity" ]]; then
 fi
 
 team_id="${WIDGITRON_TEAM_ID:-}"
-if [[ -z "$team_id" && -n "$identity" ]]; then
+if [[ -z "$team_id" && -n "$identity" && "$identity" != "-" ]]; then
   team_id="$(security find-certificate -c "$identity" -p | openssl x509 -noout -subject -nameopt sep_multiline | awk -F= '/^[[:space:]]*OU=/{print $2; exit}')"
 fi
 if [[ -n "$team_id" && ! "$team_id" =~ ^[A-Z0-9]{10}$ ]]; then
@@ -86,9 +86,9 @@ cp "$source_dir/Widget.entitlements" "$temporary/Widget.entitlements"
 /usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 $group_id" "$temporary/Host.entitlements"
 /usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 $group_id" "$temporary/Widget.entitlements"
 
-if [[ -z "$identity" ]]; then
+if [[ -z "$identity" || "$identity" == "-" ]]; then
   identity="-"
-  printf 'No Apple Development signing identity found. Building for inspection with an ad-hoc signature; WidgetKit availability is unverified.\n' >&2
+  printf 'Building for inspection with an ad-hoc signature; WidgetKit availability is unverified.\n' >&2
 fi
 codesign --force --sign "$identity" --entitlements "$temporary/Widget.entitlements" "$extension"
 codesign --force --sign "$identity" "$bridge"

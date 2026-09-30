@@ -34,6 +34,8 @@ mod logger;
 #[cfg(target_os = "macos")]
 mod macos_setup;
 #[cfg(target_os = "macos")]
+mod macos_tray;
+#[cfg(target_os = "macos")]
 mod macos_widget_snapshot;
 mod models;
 mod ota;
@@ -208,9 +210,12 @@ pub fn run() {
             // Tray
             #[cfg(target_os = "macos")]
             {
+                let menu = macos_tray::create_menu(&handle)?;
+                let context_menu = menu.clone();
                 let mut tray_builder = TrayIconBuilder::new()
                     .show_menu_on_left_click(false)
-                    .on_tray_icon_event(|tray, event| {
+                    .on_menu_event(macos_tray::handle_menu_event)
+                    .on_tray_icon_event(move |tray, event| {
                         use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
                         match event {
                             TrayIconEvent::Click {
@@ -226,18 +231,13 @@ pub fn run() {
                             TrayIconEvent::Click {
                                 button: MouseButton::Right,
                                 button_state: MouseButtonState::Down,
-                                rect,
                                 ..
                             } => {
-                                if let Some(window) = tray.app_handle().get_webview_window("tray-menu") {
-                                    let scale = window.scale_factor().unwrap_or(1.0);
-                                    let icon_position = rect.position.to_physical::<i32>(scale);
-                                    let icon_size = rect.size.to_physical::<u32>(scale);
-                                    let x = icon_position.x;
-                                    let y = icon_position.y + icon_size.height as i32;
-                                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
+                                macos_tray::refresh(tray.app_handle());
+                                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                    if let Err(error) = window.popup_menu(&context_menu) {
+                                        log::warn!("Failed to open macOS menu bar menu: {error}");
+                                    }
                                 }
                             }
                             _ => {}

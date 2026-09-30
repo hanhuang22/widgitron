@@ -68,6 +68,30 @@ fn lock_runtime() -> Result<std::sync::MutexGuard<'static, DockRuntime>, String>
         .map_err(|_| "Sidebar dock controller lock is poisoned".to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn show_without_focus(window: &WebviewWindow) -> Result<(), String> {
+    use objc2_app_kit::NSWindow;
+
+    let window = window.clone();
+    let native_window = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = (|| -> Result<(), String> {
+                let native = native_window.ns_window().map_err(|error| error.to_string())?;
+                if native.is_null() {
+                    return Err("macOS sidebar has no native window".to_string());
+                }
+                let native: &NSWindow = unsafe { &*native.cast() };
+                native.orderFront(None);
+                Ok(())
+            })();
+            if let Err(error) = result {
+                log::warn!("Failed to show macOS sidebar without focus: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
 pub fn ensure_sidebar_window(app: &AppHandle) -> Result<WebviewWindow, String> {
     if let Some(window) = app.get_webview_window(SIDEBAR_LABEL) {
         return Ok(window);
@@ -119,6 +143,9 @@ pub fn start(app: AppHandle, config: &AppConfig) -> Result<(), String> {
 
     position_sidebar(&app, &window)?;
     if expanded {
+        #[cfg(target_os = "macos")]
+        show_without_focus(&window)?;
+        #[cfg(not(target_os = "macos"))]
         window.show().map_err(|err| err.to_string())?;
     }
     emit_state(&app);
@@ -144,10 +171,19 @@ pub fn apply_config(app: &AppHandle, config: &AppConfig) {
         if let Err(err) = position_sidebar(app, &window) {
             log::warn!("Failed to position sidebar: {err}");
         }
-        let visibility_result = if expanded {
-            window.show()
+        let visibility_result: Result<(), String> = if expanded {
+            #[cfg(target_os = "macos")]
+            {
+                if window.is_visible().unwrap_or(false) {
+                    Ok(())
+                } else {
+                    show_without_focus(&window)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            window.show().map_err(|error| error.to_string())
         } else {
-            window.hide()
+            window.hide().map_err(|error| error.to_string())
         };
         if let Err(err) = visibility_result {
             log::warn!("Failed to update sidebar visibility: {err}");
@@ -160,9 +196,19 @@ pub fn show(app: &AppHandle, focus: bool) -> Result<(), String> {
     ensure_started(app)?;
     let window = ensure_sidebar_window(app)?;
     position_sidebar(app, &window)?;
-    window.show().map_err(|err| err.to_string())?;
+    #[cfg(target_os = "macos")]
     if focus {
+        window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
+    } else if !window.is_visible().map_err(|err| err.to_string())? {
+        show_without_focus(&window)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show().map_err(|err| err.to_string())?;
+        if focus {
+            window.set_focus().map_err(|err| err.to_string())?;
+        }
     }
     lock_runtime()?.state.expanded = true;
     emit_state(app);
@@ -231,7 +277,11 @@ fn ensure_started(app: &AppHandle) -> Result<(), String> {
 
 fn emit_state(app: &AppHandle) {
     if let Ok(runtime) = lock_runtime() {
-        let _ = app.emit("sidebar_state_update", runtime.state.clone());
+        let state = runtime.state.clone();
+        drop(runtime);
+        let _ = app.emit("sidebar_state_update", state.clone());
+        #[cfg(target_os = "macos")]
+        crate::macos_tray::refresh_labels(app, state.expanded);
     }
 }
 

@@ -143,6 +143,7 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     config_store::write_config(&app, "app_config.json", &config)?;
     #[cfg(target_os = "macos")]
     if previous.language != config.language {
+        crate::macos_tray::refresh(&app);
         let quota_config = crate::quota::read_quota_config(&app);
         if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(&app, &quota_config) {
             log::warn!("Failed to update macOS quota widget language: {error}");
@@ -344,7 +345,7 @@ pub async fn show_main(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
-    crate::sidebar_dock::show(&app, true)?;
+    crate::sidebar_dock::show(&app, !cfg!(target_os = "macos"))?;
     if let Some(tray_menu) = app.get_webview_window("tray-menu") {
         let _ = tray_menu.hide();
     }

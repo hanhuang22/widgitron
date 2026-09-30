@@ -5,6 +5,10 @@
 <h1 align="center">Widgitron</h1>
 
 <p align="center">
+  <strong>English</strong> ｜ <a href="README.zh-CN.md">中文版</a>
+</p>
+
+<p align="center">
   <strong>A high-performance, modular desktop widget framework for researchers and developers.</strong>
 </p>
 
@@ -77,62 +81,25 @@ pnpm tauri build
 
 ### macOS build
 
-Install full Xcode, Node.js, and pnpm, then run `pnpm macos:build`. This builds
-the Tauri app and the WidgetKit quota extension from
-`macos/WidgitronWidgets.xcodeproj`. The extension contains quota, GPU, and
-conference deadline widgets. The Rust build compiles its own OpenSSL for
-SSH support, so a separate Homebrew OpenSSL installation is not required.
-The local app is under `src-tauri/target/release/bundle/macos/`.
+Requires Xcode, Node.js, and pnpm.
 
-The build script looks for an Apple Development signing identity and signs the
-app and extension with it. It uses a matching team-prefixed macOS App Group so
-the app can publish display-only snapshots for WidgetKit. Override
-the identity and team with `WIDGITRON_SIGN_IDENTITY` and `WIDGITRON_TEAM_ID` if
-automatic detection is unsuitable. Without a signing identity, the script
-produces an ad-hoc signed build for inspection; WidgetKit availability is not
-verified in that case. A build signed with an Apple Development certificate
-has been verified in the macOS widget gallery. This development signature is
-for local testing. A warning-free downloaded app for other Mac users requires
-a Developer ID signature and Apple notarization; contributors can build from
-source with their own signing identity.
+```bash
+pnpm macos:build
+```
 
-An Apple Account can be used for local development testing; enrollment in the
-Apple Developer Program is needed for Apple's distribution channels. The
-team-prefixed App Group used here does not need a provisioning profile on macOS.
+The app and native quota, GPU, and deadline widgets are built in
+`src-tauri/target/release/bundle/macos/`. Add the widgets from Notification
+Center → **Edit Widgets**. The build uses an Apple Development certificate when
+available, otherwise ad-hoc signing.
 
-On macOS, Widgitron starts with the main dashboard. Left-click the menu bar
-icon to open the dashboard; right-click it for the sidebar and other actions.
-You can also open the sidebar from the dashboard's **Open Sidebar** button. It stays
-visible until you close it; **Pin Display** also opens it automatically at the
-next launch. Use **Modules & Display** on the dashboard to show individual
-floating windows as needed, and **Hide All Widgets** to clear the desktop.
-The menu bar menu can also hide all floating widgets.
-For people who work mostly in full-screen apps, the intended native widget
-destination is Notification Center; a window fixed to the desktop will not be
-visible over those apps. The native widgets are available in the macOS
-widget gallery when the app and extension are signed with the same team.
+### Continuous builds
 
-The macOS default is Simplified Chinese; change it in **Settings → General →
-Interface Language**. Existing macOS profiles receive a one-time display
-migration: the legacy four-widget auto-open layout is cleared (explicitly
-pinned widgets stay open), and overly transparent widget themes switch to
-readable light presets. Mixed and custom theme choices are retained.
-
-Windows-only edge reveal and global hotkey are not available on macOS.
-For each macOS widget, choose **Fix on Desktop** in its controls or on the
-dashboard to keep it with the desktop when using Show Desktop. **Keep above
-other windows** switches it back to a floating window. The desktop mode uses
-the existing live widget window; it is not a WidgetKit extension.
-The native widgets are separate from **Fix on Desktop**. A working signed
-build can be added from Notification Center → **Edit Widgets** by searching
-Widgitron. Quota, GPU, and deadline widgets read display-only snapshots shared
-by the app and refresh on WidgetKit's schedule. The deadline widget shows only
-conferences subscribed for reminders or explicitly pinned in the dashboard:
-one nearest deadline in the small size and at most two in the medium size.
-To add a conference, use **Remind me** on the dashboard's deadline page.
-A DMG only transports the `.app`; it does not change WidgetKit registration or
-signing.
-When a macOS update is available, the app opens its disk image for manual installation.
+GitHub Actions builds a Windows installer and a macOS app with WidgetKit on
+pushes and pull requests. Download artifacts from a completed run within seven
+days; CI needs no Apple credentials. The macOS artifact is not notarized. After
+trying to open it, you may need **System Settings → Privacy & Security → Open
+Anyway** ([Apple's instructions](https://support.apple.com/en-us/102445)).
+Developer ID signing and notarization avoid this extra step for distribution.
 
 ## 🤝 Contributing
 

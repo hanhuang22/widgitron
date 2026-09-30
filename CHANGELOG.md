@@ -3,14 +3,16 @@
 ## [Unreleased] - 2026-09-30
 
 ### 中文
+- **自动构建**：新增 GitHub Actions，在推送和拉取请求时检查 Windows x64 安装包与包含 WidgetKit 扩展的 macOS 应用构建；macOS 检查使用临时签名，无需上传 Apple 凭证。
 - **macOS 系统小组件**：新增额度、GPU 和论文截止日期小组件；截止日期仅显示用户设置提醒或置顶的近期会议，点击小组件可打开主界面。使用 Xcode 构建扩展，并通过同一 App Group 共享不含凭据的展示数据。
-- **界面与操作**：macOS 主窗口恢复原生红黄绿按钮，修正最小窗口尺寸、总览与设置页布局；额度监控、服务器和会议可在对应页面添加或配置，侧边栏与设置面板按钮可再次点击关闭。菜单栏图标左键打开主界面，右键打开菜单；退出项简化为“退出”，并用分隔线隔开。完善中英文界面文案。
+- **界面与操作**：macOS 主窗口恢复原生红黄绿按钮，修正最小窗口尺寸、总览与设置页布局；额度监控、服务器和会议可在对应页面添加或配置，侧边栏与设置面板按钮可再次点击关闭，主界面操作侧边栏时保持焦点。菜单栏图标左键打开主界面，右键使用原生系统菜单；退出项简化为“退出”，并用分隔线隔开。完善中英文界面文案。
 - **主机监控**：本机和远程 Linux 服务器显示 CPU、内存用量；没有 GPU 时仍正常显示在线状态。支持解析 SSH 配置中的嵌套 `Include` 文件。
 - **arXiv**：不设置关键词时显示所选分类的近期论文，并改进空状态提示。
 
 ### English
+- **Continuous builds**: Added GitHub Actions checks for the Windows x64 installer and macOS app with WidgetKit on pushes and pull requests. macOS build checks use ad-hoc signing and require no Apple credentials.
 - **Native macOS widgets**: Added quota, GPU, and paper deadline widgets. Deadline widgets show only upcoming conferences selected for reminders or pinned by the user; clicking a widget opens the dashboard. The Xcode extension shares display-only snapshots without credentials through a matching App Group.
-- **Interface and controls**: Restored native macOS window controls and improved minimum window sizing, overview layout, and Settings layout. Quota monitors, servers, and conferences can be added or configured from their pages; sidebar and settings controls now toggle closed as well as open. A left click on the menu bar icon opens the dashboard, while a right click opens its menu. The separated quit item uses the short label “Quit”, and Chinese/English interface copy has been refined.
+- **Interface and controls**: Restored native macOS window controls and improved minimum window sizing, overview layout, and Settings layout. Quota monitors, servers, and conferences can be added or configured from their pages; sidebar and settings controls now toggle closed as well as open without taking focus from the dashboard. A left click on the menu bar icon opens the dashboard, while a right click opens a native macOS menu. The separated quit item uses the short label “Quit”, and Chinese/English interface copy has been refined.
 - **Host monitoring**: Added CPU and memory usage for localhost and remote Linux servers, with a clear online state when no GPU is present. SSH configuration parsing now follows nested `Include` files.
 - **arXiv**: With no keywords, shows recent papers from the selected category and provides clearer empty states.
 
