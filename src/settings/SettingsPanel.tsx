@@ -3070,7 +3070,7 @@ export function SettingsPanel({
                 setQuotaItemSettingsId(null);
                 setActiveSection(tab.id);
               }}
-              className={`flex items-center gap-2 px-3 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all relative whitespace-nowrap text-left w-full ${
+              className={`flex items-center gap-2 px-3 py-3.5 rounded-2xl text-xs font-bold tracking-normal transition-all relative whitespace-nowrap text-left w-full ${
                 isActive
                   ? appConfig.theme === "light"
                     ? "text-blue-600"
