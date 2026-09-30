@@ -47,10 +47,10 @@ const MIDNIGHT_THEME: ResolvedSidebarTheme = {
   gpu: "#3b82f6",
   deadlines: "#f59e0b",
   arxiv: "#ec4899",
-  background_opacity: 0.98,
-  header_opacity: 0.98,
-  card_opacity: 0.96,
-  blur: 0,
+  background_opacity: isMacOS ? 0.9 : 0.98,
+  header_opacity: isMacOS ? 0.94 : 0.98,
+  card_opacity: isMacOS ? 0.9 : 0.96,
+  blur: isMacOS ? 14 : 0,
 };
 
 const LIGHT_THEME: ResolvedSidebarTheme = {
@@ -65,9 +65,9 @@ const LIGHT_THEME: ResolvedSidebarTheme = {
   gpu: "#2563eb",
   deadlines: "#7c3aed",
   arxiv: "#db2777",
-  background_opacity: isMacOS ? 0.96 : 0.84,
-  header_opacity: isMacOS ? 0.98 : 0.9,
-  card_opacity: isMacOS ? 0.94 : 0.76,
+  background_opacity: isMacOS ? 0.88 : 0.84,
+  header_opacity: isMacOS ? 0.92 : 0.9,
+  card_opacity: isMacOS ? 0.88 : 0.76,
   blur: 18,
 };
 

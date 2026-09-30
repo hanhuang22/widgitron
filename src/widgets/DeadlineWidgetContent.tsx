@@ -206,7 +206,7 @@ export function DeadlineWidgetContent({ hideHeader = false }: { hideHeader?: boo
             style={{ borderColor: `${subText}33`, color: subText }}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">Service Disabled</span>
-            <span className="text-[9px] opacity-70 mt-1">Enable Paper Deadlines in the dashboard.</span>
+            <span className="text-[9px] opacity-70 mt-1">Enable monitoring on the module page.</span>
           </div>
         ) : displayList.length > 0 ? (
           displayList.map((dl, idx) => (

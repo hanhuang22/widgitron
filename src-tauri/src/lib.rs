@@ -33,6 +33,8 @@ mod gpu;
 mod logger;
 #[cfg(target_os = "macos")]
 mod macos_setup;
+#[cfg(target_os = "macos")]
+mod macos_widget_snapshot;
 mod models;
 mod ota;
 mod quota;
@@ -81,6 +83,7 @@ pub fn run() {
             commands::save_gpu_config,
             commands::save_paper_config,
             commands::get_gpu_config,
+            commands::ssh_config_has_host,
             commands::get_paper_config,
             commands::get_app_config,
             commands::save_app_config,
@@ -93,6 +96,8 @@ pub fn run() {
             commands::show_main,
             commands::show_sidebar,
             commands::hide_sidebar,
+            commands::toggle_sidebar_visibility,
+            commands::get_native_quota_widget_status,
             commands::toggle_sidebar,
             commands::get_sidebar_state,
             commands::set_sidebar_pinned,
@@ -143,6 +148,10 @@ pub fn run() {
             // Pre-load cached quota data from disk for instant widget display
             let cached_quota_items: Vec<models::QuotaItem> = {
                 let mut cfg = quota::read_quota_config(&handle);
+                #[cfg(target_os = "macos")]
+                if let Err(error) = macos_widget_snapshot::publish_quota_snapshot(&handle, &cfg) {
+                    log::warn!("Failed to publish macOS quota widget snapshot: {error}");
+                }
                 for item in &mut cfg.items {
                     if item.provider == "antigravity" {
                         quota::group_antigravity_bars(item);
@@ -155,6 +164,17 @@ pub fn run() {
             let cached_arxiv: Vec<models::ArxivPaper> =
                 config_store::read_config(&handle, "arxiv_cache.json");
             let cached_gpu = gpu::load_gpu_cache(&handle);
+            #[cfg(target_os = "macos")]
+            {
+                let gpu_config = gpu::read_gpu_config(&handle);
+                if let Err(error) = macos_widget_snapshot::publish_gpu_snapshot(&handle, &gpu_config, &cached_gpu) {
+                    log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
+                }
+                let paper_config = config_store::read_config::<models::PaperConfig>(&handle, "paper_deadline.json");
+                if let Err(error) = macos_widget_snapshot::publish_deadline_snapshot(&handle, &paper_config, &cached_deadlines) {
+                    log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
+                }
+            }
             let state = Arc::new(models::GlobalState {
                 deadlines: Arc::new(std::sync::Mutex::new(cached_deadlines)),
                 gpu_data: Arc::new(std::sync::Mutex::new(cached_gpu)),
@@ -188,68 +208,46 @@ pub fn run() {
             // Tray
             #[cfg(target_os = "macos")]
             {
-                use tauri::menu::{Menu, MenuItem};
-
-                let dashboard = MenuItem::with_id(
-                    &handle,
-                    "show_dashboard",
-                    "打开主界面 / Dashboard",
-                    true,
-                    None::<&str>,
-                )?;
-                let sidebar = MenuItem::with_id(
-                    &handle,
-                    "show_sidebar",
-                    "打开侧边栏 / Sidebar",
-                    true,
-                    None::<&str>,
-                )?;
-                let hide_widgets = MenuItem::with_id(
-                    &handle,
-                    "hide_widgets",
-                    "隐藏所有浮窗 / Hide Widgets",
-                    true,
-                    None::<&str>,
-                )?;
-                let quit = MenuItem::with_id(
-                    &handle,
-                    "quit",
-                    "退出 Widgitron / Quit",
-                    true,
-                    None::<&str>,
-                )?;
-                let menu =
-                    Menu::with_items(&handle, &[&dashboard, &sidebar, &hide_widgets, &quit])?;
                 let mut tray_builder = TrayIconBuilder::new()
-                    .menu(&menu)
-                    .show_menu_on_left_click(true)
-                    .on_menu_event(|app, event| {
-                        let app = app.clone();
-                        match event.id().0.as_str() {
-                            "show_dashboard" => {
+                    .show_menu_on_left_click(false)
+                    .on_tray_icon_event(|tray, event| {
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+                        match event {
+                            TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
+                                ..
+                            } => {
+                                let app = tray.app_handle().clone();
                                 tauri::async_runtime::spawn(async move {
                                     let _ = commands::show_main(app).await;
                                 });
                             }
-                            "show_sidebar" => {
-                                tauri::async_runtime::spawn(async move {
-                                    let _ = commands::show_sidebar(app).await;
-                                });
+                            TrayIconEvent::Click {
+                                button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
+                                rect,
+                                ..
+                            } => {
+                                if let Some(window) = tray.app_handle().get_webview_window("tray-menu") {
+                                    let scale = window.scale_factor().unwrap_or(1.0);
+                                    let icon_position = rect.position.to_physical::<i32>(scale);
+                                    let icon_size = rect.size.to_physical::<u32>(scale);
+                                    let x = icon_position.x;
+                                    let y = icon_position.y + icon_size.height as i32;
+                                    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
                             }
-                            "hide_widgets" => {
-                                tauri::async_runtime::spawn(async move {
-                                    let state = app.state::<models::GlobalState>();
-                                    let _ = commands::hide_all_widgets(app.clone(), state).await;
-                                });
-                            }
-                            "quit" => app.exit(0),
                             _ => {}
                         }
                     });
                 if let Some(icon) = app.default_window_icon() {
                     tray_builder = tray_builder.icon(icon.clone());
                 }
-                let _tray = tray_builder.build(&handle)?;
+                let tray = tray_builder.build(&handle)?;
+                tray.set_show_menu_on_left_click(false)?;
             }
 
             #[cfg(not(target_os = "macos"))]
@@ -352,7 +350,7 @@ pub fn run() {
                             } => {
                                 let app_handle = tray.app_handle().clone();
                                 tauri::async_runtime::spawn(async move {
-                                    let _ = commands::show_sidebar(app_handle).await;
+                                    let _ = commands::toggle_sidebar_visibility(app_handle).await;
                                 });
                             }
                             TrayIconEvent::DoubleClick {
@@ -430,6 +428,19 @@ pub fn run() {
                 match handle_main.get_webview_window("main") {
                     None => log::warn!("[DIAG] get_webview_window('main') returned None!"),
                     Some(main_win) => {
+                        // Saved window state can restore a size from before the minimum
+                        // changed. Reapply it after the plugin finishes restoring.
+                        let min_size = tauri::LogicalSize::new(900.0, 680.0);
+                        let _ = main_win.set_min_size(Some(tauri::Size::Logical(min_size)));
+                        if let (Ok(size), Ok(scale)) = (main_win.inner_size(), main_win.scale_factor()) {
+                            let size = size.to_logical::<f64>(scale);
+                            if size.width < min_size.width || size.height < min_size.height {
+                                let _ = main_win.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                                    size.width.max(min_size.width),
+                                    size.height.max(min_size.height),
+                                )));
+                            }
+                        }
                         // Log current position before showing
                         let pos_before = main_win.outer_position();
                         let size_before = main_win.outer_size();
@@ -449,8 +460,14 @@ pub fn run() {
                                 let mon_pos = monitor.position();
                                 let mon_size = monitor.size();
                                 let scale = monitor.scale_factor();
-                                let win_w = (1000.0 * scale) as i32;
-                                let win_h = (700.0 * scale) as i32;
+                                let current_size = main_win.outer_size().unwrap_or_else(|_| {
+                                    tauri::PhysicalSize::new(
+                                        (1000.0 * scale) as u32,
+                                        (740.0 * scale) as u32,
+                                    )
+                                });
+                                let win_w = current_size.width as i32;
+                                let win_h = current_size.height as i32;
                                 let center_x = mon_pos.x + (mon_size.width as i32 - win_w) / 2;
                                 let center_y = mon_pos.y + (mon_size.height as i32 - win_h) / 2;
                                 log::warn!(
@@ -545,6 +562,14 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             let label = window.label().to_string();
+            #[cfg(target_os = "macos")]
+            if label == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
             if label == "main"
                 && matches!(
                     event,
@@ -571,6 +596,26 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            let open_main = match event {
+                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => true,
+                tauri::RunEvent::Opened { urls } => urls.iter().any(|url| {
+                    url.scheme() == "widgitron" && url.host_str() == Some("open")
+                }),
+                _ => false,
+            };
+            #[cfg(target_os = "macos")]
+            if open_main {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

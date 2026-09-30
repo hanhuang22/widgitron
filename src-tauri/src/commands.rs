@@ -44,6 +44,10 @@ pub async fn save_gpu_config(
     }
 
     crate::gpu::persist_gpu_data_cache(&app, state.inner());
+    #[cfg(target_os = "macos")]
+    if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot_from_state(&app, state.inner()) {
+        log::warn!("Failed to publish macOS GPU widget snapshot: {error}");
+    }
 
     Ok(())
 }
@@ -56,6 +60,12 @@ pub async fn save_paper_config(
 ) -> Result<(), String> {
     config_store::write_config(&app, "paper_deadline.json", &config)?;
     let _ = app.emit("paper_config_update", &config);
+    #[cfg(target_os = "macos")]
+    if let Ok(deadlines) = state.deadlines.lock() {
+        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(&app, &config, &deadlines) {
+            log::warn!("Failed to publish macOS deadline widget snapshot: {error}");
+        }
+    }
 
     let app_config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     if !app_config.deadline_enabled.unwrap_or(true) {
@@ -94,6 +104,11 @@ pub async fn save_paper_config(
 }
 
 #[tauri::command]
+pub fn ssh_config_has_host(host: String) -> bool {
+    crate::gpu::ssh_config_has_host(&host)
+}
+
+#[tauri::command]
 pub async fn get_gpu_config(app: AppHandle) -> Result<GpuConfig, String> {
     let mut config = crate::gpu::read_gpu_config(&app);
     if config.compact_mode.is_none() {
@@ -113,6 +128,9 @@ pub async fn get_paper_config(app: AppHandle) -> Result<PaperConfig, String> {
 #[tauri::command]
 pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<(), String> {
     let previous = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    // Floating-window visibility is owned by the window commands. Frontend
+    // config snapshots can lag behind a recent hide/show event.
+    config.active_widgets = previous.active_widgets.clone();
     let previous_scale = crate::ui_scale::from_config(&previous);
     let next_scale = crate::ui_scale::from_config(&config);
     let scale_changed = (previous_scale - next_scale).abs() >= 0.001;
@@ -123,6 +141,23 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     }
 
     config_store::write_config(&app, "app_config.json", &config)?;
+    #[cfg(target_os = "macos")]
+    if previous.language != config.language {
+        let quota_config = crate::quota::read_quota_config(&app);
+        if let Err(error) = crate::macos_widget_snapshot::publish_quota_snapshot(&app, &quota_config) {
+            log::warn!("Failed to update macOS quota widget language: {error}");
+        }
+        let gpu_config = crate::gpu::read_gpu_config(&app);
+        let gpu_data = crate::gpu::load_gpu_cache(&app);
+        if let Err(error) = crate::macos_widget_snapshot::publish_gpu_snapshot(&app, &gpu_config, &gpu_data) {
+            log::warn!("Failed to update macOS GPU widget language: {error}");
+        }
+        let paper_config = config_store::read_config::<PaperConfig>(&app, "paper_deadline.json");
+        let deadlines = config_store::read_config::<Vec<PaperDeadlineInfo>>(&app, "paper_deadlines_cache.json");
+        if let Err(error) = crate::macos_widget_snapshot::publish_deadline_snapshot(&app, &paper_config, &deadlines) {
+            log::warn!("Failed to update macOS deadline widget language: {error}");
+        }
+    }
     crate::sidebar_hotkey::update_global_sidebar_hotkey(config.sidebar_hotkey.clone());
     if scale_changed {
         crate::widget_layout::apply_scale_to_open_widgets(&app, next_scale);
@@ -318,7 +353,28 @@ pub async fn show_sidebar(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn hide_sidebar(app: tauri::AppHandle) -> Result<(), String> {
-    crate::sidebar_dock::collapse(&app)
+    crate::sidebar_dock::collapse(&app)?;
+    if let Some(tray_menu) = app.get_webview_window("tray-menu") {
+        let _ = tray_menu.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn toggle_sidebar_visibility(app: tauri::AppHandle) -> Result<(), String> {
+    if crate::sidebar_dock::get_state(&app)?.expanded {
+        hide_sidebar(app).await
+    } else {
+        show_sidebar(app).await
+    }
+}
+
+#[tauri::command]
+pub fn get_native_quota_widget_status() -> bool {
+    #[cfg(target_os = "macos")]
+    { crate::macos_widget_snapshot::native_quota_widget_available() }
+    #[cfg(not(target_os = "macos"))]
+    { false }
 }
 
 #[tauri::command]

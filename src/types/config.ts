@@ -254,6 +254,11 @@ export interface ServerGpuData {
   gpu_list: GpuInfo[];
   error?: string | null;
   last_update?: string | null;
+  system?: {
+    cpu_percent?: number | null;
+    memory_used_bytes: number;
+    memory_total_bytes: number;
+  } | null;
   slurm_steps?: Record<string, SlurmStep[]> | null;
   slurm_nodelists?: Record<string, string> | null;
   slurm_times?: Record<string, string> | null;

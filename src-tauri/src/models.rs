@@ -77,7 +77,7 @@ pub struct ArxivConfig {
 impl Default for ArxivConfig {
     fn default() -> Self {
         Self {
-            keywords: vec!["gaussian".into(), "vla".into(), "llm".into()],
+            keywords: Vec::new(),
             categories: vec!["cs".into()],
             update_interval: 3600, // 1 hour
             show_card_hints: Some(true),
@@ -272,13 +272,13 @@ impl Default for AppConfig {
                 deadlines: Some("#7c3aed".into()),
                 arxiv: Some("#db2777".into()),
                 background_opacity: Some(if cfg!(target_os = "macos") {
-                    0.96
+                    0.88
                 } else {
                     0.84
                 }),
-                header_opacity: Some(if cfg!(target_os = "macos") { 0.98 } else { 0.9 }),
+                header_opacity: Some(if cfg!(target_os = "macos") { 0.92 } else { 0.9 }),
                 card_opacity: Some(if cfg!(target_os = "macos") {
-                    0.94
+                    0.88
                 } else {
                     0.76
                 }),
@@ -840,10 +840,24 @@ impl Default for WidgetThemeConfig {
             widget_scope: None,
         };
 
+        // A readable light surface for macOS independent widgets. Keep the
+        // dark and transparent presets available as explicit user choices.
+        let light_theme = |source: &WidgetTheme, name: &str| {
+            let mut theme = source.clone();
+            theme.id = source.id.replace("-transparent", "-light");
+            theme.name = name.into();
+            theme.bg_opacity = 0.84;
+            theme
+        };
+        let gpu_light = light_theme(&gpu_transparent, "GPU Light");
+        let deadline_light = light_theme(&deadline_transparent, "Deadline Light");
+        let arxiv_light = light_theme(&arxiv_transparent, "Arxiv Radar Light");
+        let quota_light = light_theme(&quota_transparent, "Quota Light");
+
         let mut assignments = HashMap::new();
         let preset = |kind: &str| {
             if cfg!(target_os = "macos") {
-                format!("theme-{kind}-default")
+                format!("theme-{kind}-light")
             } else {
                 format!("theme-{kind}-transparent")
             }
@@ -859,6 +873,10 @@ impl Default for WidgetThemeConfig {
                 deadline_default,
                 arxiv_default,
                 quota_default,
+                gpu_light,
+                deadline_light,
+                arxiv_light,
+                quota_light,
                 gpu_transparent,
                 deadline_transparent,
                 arxiv_transparent,
@@ -901,12 +919,21 @@ pub struct SlurmQueueJob {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SystemMetrics {
+    pub cpu_percent: Option<f32>,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ServerGpuData {
     pub host: String,
     pub is_online: bool,
     pub gpu_list: Vec<GpuInfo>,
     pub error: Option<String>,
     pub last_update: Option<String>,
+    #[serde(default)]
+    pub system: Option<SystemMetrics>,
     pub slurm_steps: Option<HashMap<String, Vec<SlurmStep>>>,
     pub slurm_nodelists: Option<HashMap<String, String>>,
     pub slurm_times: Option<HashMap<String, String>>,
