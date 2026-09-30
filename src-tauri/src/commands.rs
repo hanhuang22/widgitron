@@ -145,14 +145,78 @@ pub async fn set_widget_always_on_top(
         return Err(format!("Unsupported widget label: {}", label));
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(win) = app.get_webview_window(&label) {
+        if pinned {
+            crate::desktop::set_macos_desktop_fixed(&win, false).await?;
+        }
+        win.set_always_on_top(pinned)
+            .map_err(|error| error.to_string())?;
+    }
+
     let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
     config
         .always_on_top
         .get_or_insert_with(Default::default)
-        .insert(label, pinned);
+        .insert(label.clone(), pinned);
+    #[cfg(target_os = "macos")]
+    if pinned {
+        config
+            .embedded
+            .get_or_insert_with(Default::default)
+            .insert(label, false);
+    }
     config_store::write_config(&app, "app_config.json", &config)?;
     let _ = app.emit("app_config_update", &config);
     Ok(config)
+}
+
+/// Persist and apply the macOS desktop-level window mode independently of the
+/// move lock and always-on-top preference.
+#[tauri::command]
+pub async fn set_widget_desktop_fixed(
+    app: AppHandle,
+    label: String,
+    fixed: bool,
+) -> Result<AppConfig, String> {
+    if !crate::widget_layout::is_tracked_widget(&label) {
+        return Err(format!("Unsupported widget label: {}", label));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(win) = app.get_webview_window(&label) {
+            if fixed {
+                win.set_always_on_top(false)
+                    .map_err(|error| error.to_string())?;
+            }
+            crate::desktop::set_macos_desktop_fixed(&win, fixed).await?;
+            if !fixed {
+                let _ = win.set_focus();
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = fixed;
+        return Err("Desktop fixation is only supported on macOS".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+        config
+            .embedded
+            .get_or_insert_with(Default::default)
+            .insert(label.clone(), fixed);
+        if fixed {
+            config
+                .always_on_top
+                .get_or_insert_with(Default::default)
+                .insert(label, false);
+        }
+        config_store::write_config(&app, "app_config.json", &config)?;
+        let _ = app.emit("app_config_update", &config);
+        Ok(config)
+    }
 }
 
 #[tauri::command]
@@ -317,6 +381,20 @@ async fn create_widget_impl_with_options(
     focus_window: bool,
 ) -> Result<(), String> {
     log::info!("Creating/Showing widget: {} ({})", title, id);
+    let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    let keep_on_top = config
+        .always_on_top
+        .as_ref()
+        .and_then(|values| values.get(&id))
+        .copied()
+        .unwrap_or(cfg!(windows));
+    #[cfg(target_os = "macos")]
+    let desktop_fixed = config
+        .embedded
+        .as_ref()
+        .and_then(|values| values.get(&id))
+        .copied()
+        .unwrap_or(false);
     let win = if let Some(win) = app.get_webview_window(&id) {
         win
     } else {
@@ -328,7 +406,7 @@ async fn create_widget_impl_with_options(
             .maximizable(false)
             .transparent(true)
             .shadow(false)
-            .always_on_top(true)
+            .always_on_top(keep_on_top)
             .skip_taskbar(true);
 
         match builder.build() {
@@ -345,9 +423,9 @@ async fn create_widget_impl_with_options(
     // native maximize capability enabled also opts them into Windows Aero
     // Snap, which can unexpectedly maximize a widget near a screen edge.
     let _ = win.set_maximizable(false);
+    let _ = win.set_always_on_top(keep_on_top);
 
-    if let Err(err) =
-        crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
+    if let Err(err) = crate::widget_layout::restore_widget_layout_preserving_desktop_mode(&app, &id)
     {
         log::error!(
             "Failed to restore widget layout for '{}' (window may keep bootstrap size 320x400): {}",
@@ -355,7 +433,16 @@ async fn create_widget_impl_with_options(
             err
         );
     }
+    #[cfg(target_os = "macos")]
+    if desktop_fixed {
+        crate::desktop::set_macos_desktop_fixed(&win, true).await?;
+    }
     let _ = win.show();
+    #[cfg(target_os = "macos")]
+    if focus_window && !desktop_fixed {
+        let _ = win.set_focus();
+    }
+    #[cfg(not(target_os = "macos"))]
     if focus_window {
         let _ = win.set_focus();
     }
@@ -402,6 +489,17 @@ pub async fn close_widget(
         let _ = win.hide();
     }
     let _ = config_store::update_widget_visibility_config(&app, &id, false).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_all_widgets(
+    app: AppHandle,
+    state: tauri::State<'_, GlobalState>,
+) -> Result<(), String> {
+    for id in crate::widget_layout::TRACKED_WIDGET_IDS {
+        close_widget(app.clone(), state.clone(), id.to_string()).await?;
+    }
     Ok(())
 }
 
@@ -787,18 +885,35 @@ pub async fn restore_widget_position(
         let config = config_store::read_config::<AppConfig>(&app, "app_config.json");
         let always_on_top = config
             .always_on_top
-            .and_then(|m| m.get(&id).cloned())
+            .as_ref()
+            .and_then(|m| m.get(&id).copied())
             .unwrap_or(false);
 
-        // Disable desktop mode to make it a normal top-level window first
+        // Disable Windows desktop parenting before changing the geometry.
         let _ = crate::desktop::set_desktop_mode(app.clone(), id.clone(), false).await;
 
         // Restore to the normalized layout tracked for the current or fallback monitor
         let _ = crate::widget_layout::ensure_widget_layout_for_window(&app, &win, &id);
         let _ = win.show();
+        #[cfg(not(target_os = "macos"))]
         let _ = win.set_focus();
 
         // Re-apply desktop mode if not pinned/always_on_top
+        #[cfg(target_os = "macos")]
+        {
+            let desktop_fixed = config
+                .embedded
+                .as_ref()
+                .and_then(|values| values.get(&id))
+                .copied()
+                .unwrap_or(false);
+            let _ = win.set_always_on_top(always_on_top && !desktop_fixed);
+            let _ = crate::desktop::set_macos_desktop_fixed(&win, desktop_fixed).await;
+            if !desktop_fixed {
+                let _ = win.set_focus();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
         if always_on_top {
             let _ = win.set_always_on_top(true);
         } else {

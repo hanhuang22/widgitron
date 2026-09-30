@@ -75,6 +75,33 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+### macOS build
+
+Install the Xcode Command Line Tools, Node.js, and pnpm, then run the commands
+above. The Rust build compiles its own OpenSSL for SSH support, so a separate
+Homebrew OpenSSL installation is not required. The generated app and disk image
+are under `src-tauri/target/release/bundle/`.
+
+On macOS, Widgitron starts with the main dashboard. Open the sidebar from the
+dashboard's **Open Sidebar** button or the menu bar icon. The sidebar stays
+visible until you close it; **Pin Display** also opens it automatically at the
+next launch. Use **Independent Widgets** on the dashboard to show individual
+floating windows as needed, and **Hide All Widgets** to clear the desktop.
+The menu bar icon also reopens the dashboard and hides all floating widgets.
+
+The macOS default is Simplified Chinese; change it in **Settings → General →
+Interface Language**. Existing macOS profiles receive a one-time display
+migration: the legacy four-widget auto-open layout is cleared (explicitly
+pinned widgets stay open), and legacy transparent widget themes switch to
+readable presets. Later user choices are retained.
+
+Windows-only edge reveal and global hotkey are not available on macOS.
+For each macOS widget, choose **Fix on Desktop** in its controls or on the
+dashboard to keep it with the desktop when using Show Desktop. **Keep above
+other windows** switches it back to a floating window. The desktop mode uses
+the existing live widget window; it is not a WidgetKit extension.
+When a macOS update is available, the app opens its disk image for manual installation.
+
 ## 🤝 Contributing
 
 Contributions welcome! Here's how:

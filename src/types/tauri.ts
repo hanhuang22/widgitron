@@ -98,10 +98,12 @@ export interface TauriCommandMap {
   save_quota_config: void;
   save_app_config: void;
   set_widget_always_on_top: AppConfig;
+  set_widget_desktop_fixed: AppConfig;
   save_theme_config: void;
   download_and_install_update: void;
   create_widget: void;
   close_widget: void;
+  hide_all_widgets: void;
   restore_widget_position: void;
   open_log_dir: void;
   open_config_dir: void;
@@ -153,10 +155,12 @@ export const TAURI_COMMAND_NAMES = [
   "save_quota_config",
   "save_app_config",
   "set_widget_always_on_top",
+  "set_widget_desktop_fixed",
   "save_theme_config",
   "download_and_install_update",
   "create_widget",
   "close_widget",
+  "hide_all_widgets",
   "restore_widget_position",
   "open_log_dir",
   "open_config_dir",
@@ -212,6 +216,7 @@ export interface TauriCommandArgs {
   save_quota_config: { config: QuotaConfig };
   save_app_config: { config: AppConfig };
   set_widget_always_on_top: { label: string; pinned: boolean };
+  set_widget_desktop_fixed: { label: string; fixed: boolean };
   save_theme_config: { config: WidgetThemeConfig };
   toggle_widget: { id: string; title: string };
   create_widget: { id: string; title: string };
@@ -232,6 +237,7 @@ export interface TauriCommandArgs {
     error?: string;
   };
   show_main: undefined;
+  hide_all_widgets: undefined;
   show_sidebar: undefined;
   hide_sidebar: undefined;
   toggle_sidebar: undefined;
