@@ -248,9 +248,10 @@ pub fn run() {
                             _ => {}
                         }
                     });
-                if let Some(icon) = app.default_window_icon() {
-                    tray_builder = tray_builder.icon(icon.clone());
-                }
+                // Derived from icon.png with its opaque background removed for macOS tinting.
+                let tray_icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+                tray_builder = tray_builder.icon(tray_icon).icon_as_template(true);
                 let tray = tray_builder.build(&handle)?;
                 tray.set_show_menu_on_left_click(false)?;
             }
