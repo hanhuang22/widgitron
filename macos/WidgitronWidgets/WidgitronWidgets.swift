@@ -282,6 +282,12 @@ private struct GpuView: View {
     private var servers: [GpuServer] { entry.snapshot?.servers ?? [] }
     private var online: [GpuServer] { servers.filter(\.isOnline) }
 
+    private func gpuUsageLabel(_ server: GpuServer) -> String? {
+        guard server.isOnline, server.gpuCount > 0 else { return nil }
+        let value = server.averageUtil.map { "\(Int(min(max($0, 0), 100).rounded()))%" } ?? "—"
+        return chinese ? "GPU 平均使用率 \(value)" : "GPU avg usage \(value)"
+    }
+
     private func resourceLabel(_ server: GpuServer) -> String? {
         guard server.isOnline else { return nil }
         var parts: [String] = []
@@ -296,7 +302,7 @@ private struct GpuView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: family == .systemSmall ? 8 : 6) {
             HStack(spacing: 5) {
                 Image(systemName: "cpu").foregroundStyle(.tint)
                 Text(chinese ? "GPU 监控" : "GPU Monitor")
@@ -320,21 +326,24 @@ private struct GpuView: View {
                 }
                 Spacer(minLength: 0)
             } else {
-                ForEach(servers.prefix(2), id: \.host) { server in
-                    VStack(alignment: .leading, spacing: 4) {
+                ForEach(servers.prefix(3), id: \.host) { server in
+                    VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
                             Text(server.host).font(.caption.weight(.semibold)).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(server.isOnline
-                                 ? "\(server.gpuCount) GPU"
+                                 ? (server.gpuCount > 0 ? "\(server.gpuCount) GPU" : (chinese ? "无 GPU" : "No GPU"))
                                  : (chinese ? "离线" : "Offline"))
                                 .font(.caption2).foregroundStyle(server.isOnline ? .primary : .secondary)
                         }
-                        if server.isOnline, let utilization = server.averageUtil {
-                            ProgressView(value: min(max(utilization, 0), 100), total: 100)
-                                .tint(.mint)
-                        }
-                        if let label = resourceLabel(server) {
+                        if let usage = gpuUsageLabel(server), let resources = resourceLabel(server) {
+                            HStack(spacing: 4) {
+                                Text(usage).foregroundStyle(.primary)
+                                Text("· \(resources)").foregroundStyle(.secondary)
+                                    .minimumScaleFactor(0.8)
+                            }
+                            .font(.caption2).lineLimit(1)
+                        } else if let label = gpuUsageLabel(server) ?? resourceLabel(server) {
                             Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
