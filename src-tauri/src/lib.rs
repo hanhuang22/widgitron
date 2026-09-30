@@ -89,6 +89,7 @@ pub fn run() {
             commands::get_paper_config,
             commands::get_app_config,
             commands::save_app_config,
+            commands::save_sidebar_tile_layout,
             commands::set_widget_always_on_top,
             commands::set_widget_desktop_fixed,
             commands::get_deadlines,
@@ -145,6 +146,10 @@ pub fn run() {
                 log::warn!("Failed to apply macOS display defaults: {err}");
             }
             log::info!("Using config directory: {}", config_dir.display());
+            #[cfg(target_os = "macos")]
+            if let Err(error) = macos_widget_snapshot::start_snapshot_server(&handle) {
+                log::warn!("Failed to start local macOS widget feed: {error}");
+            }
 
             // Global State
             // Pre-load cached quota data from disk for instant widget display
@@ -255,10 +260,11 @@ pub fn run() {
                 let mut tray_builder = TrayIconBuilder::new()
                     .show_menu_on_left_click(false)
                     .on_tray_icon_event(|tray, event| {
-                        use tauri::tray::{MouseButton, TrayIconEvent};
+                        use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
                         match event {
                             TrayIconEvent::Click {
                                 button: MouseButton::Right,
+                                button_state: MouseButtonState::Down,
                                 position,
                                 ..
                             } => {
@@ -346,22 +352,22 @@ pub fn run() {
                             }
                             TrayIconEvent::Click {
                                 button: MouseButton::Left,
+                                button_state: MouseButtonState::Down,
                                 ..
                             } => {
                                 let app_handle = tray.app_handle().clone();
                                 tauri::async_runtime::spawn(async move {
-                                    let _ = commands::toggle_sidebar_visibility(app_handle).await;
+                                    let _ = commands::show_main(app_handle).await;
                                 });
                             }
                             TrayIconEvent::DoubleClick {
                                 button: MouseButton::Left,
                                 ..
                             } => {
-                                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                                    let _ = window.unminimize();
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
+                                let app_handle = tray.app_handle().clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = commands::show_main(app_handle).await;
+                                });
                             }
                             _ => {}
                         }

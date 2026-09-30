@@ -1162,12 +1162,12 @@ function App() {
 
     sidebarOrderRef.current = nextOrder;
     setSidebarTileLayoutDraft(nextLayout);
-    await onSaveApp({
-      ...appConfig,
-      sidebar_order: nextOrder,
-      sidebar_tile_layout: nextLayout,
-      sidebar_widgets: nextWidgets,
+    const updated = await tauriInvoke("save_sidebar_tile_layout", {
+      order: nextOrder,
+      layout: nextLayout,
+      widgets: nextWidgets,
     });
+    setAppConfig(updated);
   };
 
   const handleMasterServiceToggle = createMasterServiceToggleHandler({
@@ -1515,12 +1515,6 @@ function App() {
     const sidebarWindowBorder = sidebarIsLight
       ? "rgba(203, 213, 225, 0.96)"
       : "rgba(255, 255, 255, 0.4)";
-    const sidebarHiddenTransform: Record<SidebarDockState["edge"], string> = {
-      left: "translate3d(-100%, 0, 0)",
-      top: "translate3d(0, -100%, 0)",
-      right: "translate3d(100%, 0, 0)",
-      bottom: "translate3d(0, 100%, 0)",
-    };
     const sidebarDockRounding: Record<SidebarDockState["edge"], string> = {
       left: "rounded-r-lg",
       top: "rounded-b-lg",
@@ -1649,11 +1643,13 @@ function App() {
       const compactedLayout = compactSidebarTileLayout(nextLayout, visibleSidebarKeys);
       sidebarOrderRef.current = nextOrder;
       setSidebarTileLayoutDraft(compactedLayout);
-      onSaveApp({
-        ...appConfig,
-        sidebar_order: nextOrder,
-        sidebar_tile_layout: compactedLayout,
-      }).catch(console.error);
+      tauriInvoke("save_sidebar_tile_layout", {
+        order: nextOrder,
+        layout: compactedLayout,
+        widgets: null,
+      })
+        .then(setAppConfig)
+        .catch(console.error);
     };
     const startSidebarTileMove = (
       event: ReactPointerEvent<HTMLDivElement>,
@@ -1871,7 +1867,7 @@ function App() {
 
     return (
       <div
-        className={`absolute inset-0 relative flex flex-col overflow-hidden select-none transition-[transform,box-shadow,outline-color] duration-150 ease-out will-change-transform ${sidebarDockRounding[sidebarDockState.edge]} ${
+        className={`absolute inset-0 flex flex-col overflow-hidden select-none transition-[box-shadow,outline-color] duration-150 ease-out ${sidebarDockRounding[sidebarDockState.edge]} ${
           sidebarIsLight ? "text-slate-900" : "text-white"
         }`}
         style={{
@@ -1894,9 +1890,6 @@ function App() {
           boxShadow: `inset 0 0 0 1px ${sidebarWindowBorder}`,
           outline: sidebarDockState.dragging ? "2px solid rgba(56, 189, 248, 0.72)" : undefined,
           outlineOffset: sidebarDockState.dragging ? "-2px" : undefined,
-          transform: sidebarDockState.expanded
-            ? "translate3d(0, 0, 0)"
-            : sidebarHiddenTransform[sidebarDockState.edge],
         }}
       >
         {sidebarWindowResizeHandles.map((handle) => (

@@ -5,6 +5,7 @@ import type {
   GpuConfig,
   PaperConfig,
   PaperDeadlineInfo,
+  SidebarTileLayoutConfig,
   QuotaConfig,
   QuotaItem,
   ServerGpuData,
@@ -98,6 +99,7 @@ export interface TauriCommandMap {
   save_arxiv_config: void;
   save_quota_config: void;
   save_app_config: void;
+  save_sidebar_tile_layout: AppConfig;
   set_widget_always_on_top: AppConfig;
   set_widget_desktop_fixed: AppConfig;
   save_theme_config: void;
@@ -158,6 +160,7 @@ export const TAURI_COMMAND_NAMES = [
   "save_arxiv_config",
   "save_quota_config",
   "save_app_config",
+  "save_sidebar_tile_layout",
   "set_widget_always_on_top",
   "set_widget_desktop_fixed",
   "save_theme_config",
@@ -222,6 +225,11 @@ export interface TauriCommandArgs {
   save_arxiv_config: { config: ArxivConfig };
   save_quota_config: { config: QuotaConfig };
   save_app_config: { config: AppConfig };
+  save_sidebar_tile_layout: {
+    order: string[];
+    layout: Record<string, SidebarTileLayoutConfig>;
+    widgets: Record<string, boolean> | null;
+  };
   set_widget_always_on_top: { label: string; pinned: boolean };
   set_widget_desktop_fixed: { label: string; fixed: boolean };
   save_theme_config: { config: WidgetThemeConfig };

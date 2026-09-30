@@ -3,7 +3,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::config_store;
 use crate::models::{
     AppConfig, ArxivConfig, ArxivPaper, GlobalState, GpuConfig, PaperConfig, PaperDeadlineInfo,
-    QuotaConfig, QuotaItem, ServerGpuData, ToggleWidgetResponse, WidgetThemeConfig,
+    QuotaConfig, QuotaItem, ServerGpuData, SidebarTileLayoutConfig, ToggleWidgetResponse,
+    WidgetThemeConfig,
 };
 
 #[tauri::command]
@@ -166,6 +167,25 @@ pub async fn save_app_config(app: AppHandle, mut config: AppConfig) -> Result<()
     crate::sidebar_dock::apply_config(&app, &config);
     let _ = app.emit("app_config_update", &config);
     Ok(())
+}
+
+/// Update sidebar card layout without overwriting settings edited in another window.
+#[tauri::command]
+pub fn save_sidebar_tile_layout(
+    app: AppHandle,
+    order: Vec<String>,
+    layout: std::collections::HashMap<String, SidebarTileLayoutConfig>,
+    widgets: Option<std::collections::HashMap<String, bool>>,
+) -> Result<AppConfig, String> {
+    let mut config = config_store::read_config::<AppConfig>(&app, "app_config.json");
+    config.sidebar_order = Some(order);
+    config.sidebar_tile_layout = Some(layout);
+    if let Some(widgets) = widgets {
+        config.sidebar_widgets = Some(widgets);
+    }
+    config_store::write_config(&app, "app_config.json", &config)?;
+    let _ = app.emit("app_config_update", &config);
+    Ok(config)
 }
 
 /// Update only one widget's always-on-top preference. Widget windows can stay

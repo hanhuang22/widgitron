@@ -1,4 +1,5 @@
-//! The WidgetKit extension reads this display-only snapshot from our shared container.
+//! The WidgetKit extension reads display-only snapshots from App Group storage
+//! or from the loopback feed when ad-hoc signatures cannot access App Groups.
 //! Never put credentials or raw provider responses in this file.
 
 use serde::Serialize;
@@ -7,6 +8,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::ffi::{c_char, CString};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
 use libloading::{Library, Symbol};
 use tauri::AppHandle;
 use objc2_foundation::{NSFileManager, NSString};
@@ -18,6 +22,42 @@ const GROUP_ID: &str = match option_env!("WIDGITRON_APP_GROUP_ID") {
     None => "group.com.evan.widgitron",
 };
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const SNAPSHOT_PORT: u16 = 42837;
+const SNAPSHOT_FILES: [&str; 3] = ["quota-snapshot.json", "gpu-snapshot.json", "deadline-snapshot.json"];
+
+pub fn start_snapshot_server(app: &AppHandle) -> Result<(), String> {
+    let listener = TcpListener::bind(("127.0.0.1", SNAPSHOT_PORT))
+        .map_err(|error| format!("Cannot bind local widget snapshot server: {error}"))?;
+    let directory = crate::utils::get_config_dir(app).join("widget-snapshots");
+    std::thread::Builder::new()
+        .name("widgitron-widget-snapshots".into())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                match connection {
+                    Ok(stream) => serve_snapshot(stream, &directory),
+                    Err(error) => log::warn!("Widget snapshot server connection failed: {error}"),
+                }
+            }
+        })
+        .map_err(|error| format!("Cannot start widget snapshot server: {error}"))?;
+    Ok(())
+}
+
+fn serve_snapshot(mut stream: TcpStream, directory: &std::path::Path) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let mut request = [0u8; 1024];
+    let Ok(size) = stream.read(&mut request) else { return };
+    let request = String::from_utf8_lossy(&request[..size]);
+    let filename = SNAPSHOT_FILES.iter().find(|file| request.starts_with(&format!("GET /{file} HTTP/")));
+    let (status, body) = match filename.and_then(|file| fs::read(directory.join(file)).ok()) {
+        Some(bytes) => ("200 OK", bytes),
+        None => ("404 Not Found", Vec::new()),
+    };
+    let header = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len());
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(&body);
+}
 
 #[derive(Serialize)]
 struct QuotaSnapshot<'a> {
@@ -84,7 +124,7 @@ pub fn publish_quota_snapshot(app: &AppHandle, config: &QuotaConfig) -> Result<(
         items: config.items.iter().map(display_item).collect(),
     };
 
-    write_snapshot("quota-snapshot.json", &snapshot)
+    write_snapshot(app, "quota-snapshot.json", &snapshot)
 }
 
 pub fn publish_gpu_snapshot(
@@ -116,7 +156,7 @@ pub fn publish_gpu_snapshot(
             memory_total_bytes: system.map(|metrics| metrics.memory_total_bytes),
         })
     }).collect();
-    write_snapshot("gpu-snapshot.json", &GpuSnapshot { language: &language, servers })
+    write_snapshot(app, "gpu-snapshot.json", &GpuSnapshot { language: &language, servers })
 }
 
 pub fn publish_gpu_snapshot_from_state(app: &AppHandle, state: &GlobalState) -> Result<(), String> {
@@ -138,7 +178,7 @@ pub fn publish_deadline_snapshot(
         year: &deadline.year,
         deadline_utc: &deadline.deadline_utc,
     }).collect();
-    write_snapshot("deadline-snapshot.json", &DeadlineSnapshot { language: &language, has_selections, items })
+    write_snapshot(app, "deadline-snapshot.json", &DeadlineSnapshot { language: &language, has_selections, items })
 }
 
 fn selected_deadlines<'a>(config: &PaperConfig, deadlines: &'a [PaperDeadlineInfo]) -> Vec<&'a PaperDeadlineInfo> {
@@ -147,25 +187,46 @@ fn selected_deadlines<'a>(config: &PaperConfig, deadlines: &'a [PaperDeadlineInf
     let pinned: HashSet<&str> = config.pinned_deadline_ids.as_ref().into_iter().flatten()
         .map(String::as_str).collect();
     let now = chrono::Utc::now();
-    let mut selected: Vec<_> = deadlines.iter().filter(|deadline| {
+    let mut by_conference: HashMap<_, (&PaperDeadlineInfo, bool, chrono::DateTime<chrono::Utc>)> = HashMap::new();
+    for deadline in deadlines {
         let key = format!("{}|{}|{}", deadline.title.trim().to_lowercase(), deadline.year.trim().to_lowercase(), deadline.deadline_utc.trim());
-        (subscribed.contains(&deadline.title.trim().to_lowercase()) || pinned.contains(key.as_str()))
-            && chrono::DateTime::parse_from_rfc3339(&deadline.deadline_utc)
-                .is_ok_and(|date| date.with_timezone(&chrono::Utc) > now)
-    }).collect();
-    selected.sort_by(|a, b| a.deadline_utc.cmp(&b.deadline_utc));
-    selected
+        let is_pinned = pinned.contains(key.as_str());
+        if !is_pinned && !subscribed.contains(&deadline.title.trim().to_lowercase()) {
+            continue;
+        }
+        let Ok(date) = chrono::DateTime::parse_from_rfc3339(&deadline.deadline_utc) else {
+            continue;
+        };
+        let date = date.with_timezone(&chrono::Utc);
+        if date <= now {
+            continue;
+        }
+
+        let conference = (deadline.title.trim().to_lowercase(), deadline.year.trim().to_lowercase());
+        let replace = match by_conference.get(&conference) {
+            None => true,
+            Some((_, current_pinned, current_date)) => {
+                (is_pinned && !*current_pinned)
+                    || (is_pinned == *current_pinned && date < *current_date)
+            }
+        };
+        if replace {
+            by_conference.insert(conference, (deadline, is_pinned, date));
+        }
+    }
+    let mut selected: Vec<_> = by_conference.into_values().collect();
+    selected.sort_by(|a, b| a.2.cmp(&b.2));
+    selected.into_iter().map(|(deadline, _, _)| deadline).collect()
 }
 
-fn write_snapshot<T: Serialize>(file: &str, snapshot: &T) -> Result<(), String> {
-    let dir = shared_container()?;
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let destination = dir.join(file);
-    let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temporary = dir.join(format!("{file}.{}.{}.tmp", std::process::id(), sequence));
+fn write_snapshot<T: Serialize>(app: &AppHandle, file: &str, snapshot: &T) -> Result<(), String> {
     let bytes = serde_json::to_vec(snapshot).map_err(|error| error.to_string())?;
-    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, destination).map_err(|error| error.to_string())?;
+    let local = crate::utils::get_config_dir(app).join("widget-snapshots");
+    write_snapshot_file(&local, file, &bytes)?;
+    match shared_container().and_then(|dir| write_snapshot_file(&dir, file, &bytes)) {
+        Ok(()) => {},
+        Err(error) => log::debug!("App Group widget snapshot unavailable; local widget feed will be used: {error}"),
+    }
     let kind = match file {
         "quota-snapshot.json" => "com.evan.widgitron.quota",
         "gpu-snapshot.json" => "com.evan.widgitron.gpu",
@@ -176,6 +237,15 @@ fn write_snapshot<T: Serialize>(file: &str, snapshot: &T) -> Result<(), String> 
         log::warn!("Failed to reload macOS widget {kind}: {error}");
     }
     Ok(())
+}
+
+fn write_snapshot_file(dir: &std::path::Path, file: &str, bytes: &[u8]) -> Result<(), String> {
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let destination = dir.join(file);
+    let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = dir.join(format!("{file}.{}.{}.tmp", std::process::id(), sequence));
+    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, destination).map_err(|error| error.to_string())
 }
 
 fn reload_widget(kind: &str) -> Result<(), String> {
@@ -262,5 +332,29 @@ mod tests {
         let selected = selected_deadlines(&config, &deadlines);
         assert_eq!(selected.iter().map(|item| item.title.as_str()).collect::<Vec<_>>(), vec!["NeurIPS", "ICML"]);
         assert!(selected_deadlines(&PaperConfig::default(), &deadlines).is_empty());
+    }
+
+    #[test]
+    fn subscribed_conference_shows_only_its_nearest_round() {
+        let mut first = deadline("VLDB", 3);
+        first.year = "2027".into();
+        let mut second = deadline("VLDB", 33);
+        second.year = "2027".into();
+        let config = PaperConfig {
+            subscribed_titles: Some(vec!["VLDB".into()]),
+            ..PaperConfig::default()
+        };
+        let deadlines = vec![second.clone(), first.clone()];
+        let selected = selected_deadlines(&config, &deadlines);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].deadline_utc, first.deadline_utc);
+
+        let pinned_config = PaperConfig {
+            pinned_deadline_ids: Some(vec![format!("vldb|2027|{}", second.deadline_utc)]),
+            ..config
+        };
+        let selected = selected_deadlines(&pinned_config, &deadlines);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].deadline_utc, second.deadline_utc);
     }
 }

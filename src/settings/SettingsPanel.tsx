@@ -1709,7 +1709,7 @@ export function SettingsPanel({
                   Pin Display
                 </div>
                 <p className="text-[9px] text-slate-400">
-                  {isMacOS ? "Open the sidebar automatically when Widgitron starts." : "Keep the sidebar pinned open instead of hiding when the pointer leaves."}
+                  Keep the sidebar pinned open instead of hiding when the pointer leaves.
                 </p>
               </div>
               <MasterSwitch
@@ -1718,7 +1718,7 @@ export function SettingsPanel({
                 onToggle={(enabled) => onSaveApp({ ...appConfig, sidebar_pinned: enabled })}
               />
             </div>
-            {!isMacOS && <div className="space-y-4 border-t border-[var(--dashboard-border)] px-3 py-3">
+            <div className="space-y-4 border-t border-[var(--dashboard-border)] px-3 py-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="space-y-1">
@@ -1787,7 +1787,7 @@ export function SettingsPanel({
                   aria-label="Sidebar hide sensitivity"
                 />
               </div>
-            </div>}
+            </div>
             {!isMacOS && <div className="space-y-3 border-t border-[var(--dashboard-border)] px-3 py-3">
               <div className="space-y-1">
                 <div className={`text-[10px] font-black uppercase tracking-wider ${

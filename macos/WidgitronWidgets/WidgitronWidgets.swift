@@ -8,11 +8,40 @@ private let quotaWidgetKind = "com.evan.widgitron.quota"
 private let gpuWidgetKind = "com.evan.widgitron.gpu"
 private let deadlineWidgetKind = "com.evan.widgitron.deadlines"
 private let openAppURL = URL(string: "widgitron://open")
+private let snapshotBaseURL = URL(string: "http://127.0.0.1:42837")!
+
+private func cachedSnapshotURL(_ file: String) -> URL? {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        .first?.appendingPathComponent("widget-snapshots", isDirectory: true)
+        .appendingPathComponent(file)
+}
 
 private func readSnapshot<T: Decodable>(_ file: String) -> T? {
-    guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup),
-          let data = try? Data(contentsOf: directory.appendingPathComponent(file)) else { return nil }
-    return try? JSONDecoder().decode(T.self, from: data)
+    let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)
+        .map { $0.appendingPathComponent(file) }
+    for url in [shared, cachedSnapshotURL(file)].compactMap({ $0 }) {
+        if let data = try? Data(contentsOf: url), let snapshot = try? JSONDecoder().decode(T.self, from: data) {
+            return snapshot
+        }
+    }
+    return nil
+}
+
+private func loadSnapshot<T: Decodable>(_ file: String, as type: T.Type, completion: @escaping (T?) -> Void) {
+    var request = URLRequest(url: snapshotBaseURL.appendingPathComponent(file))
+    request.timeoutInterval = 2
+    URLSession.shared.dataTask(with: request) { data, response, _ in
+        if let response = response as? HTTPURLResponse, response.statusCode == 200,
+           let data, let snapshot = try? JSONDecoder().decode(T.self, from: data) {
+            if let cache = cachedSnapshotURL(file) {
+                try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: cache, options: .atomic)
+            }
+            completion(snapshot)
+        } else {
+            completion(readSnapshot(file))
+        }
+    }.resume()
 }
 
 private struct QuotaSnapshot: Decodable {
@@ -84,16 +113,17 @@ private struct QuotaProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (QuotaEntry) -> Void) {
-        completion(context.isPreview ? placeholder(in: context) : currentEntry())
+        if context.isPreview { completion(placeholder(in: context)); return }
+        loadSnapshot("quota-snapshot.json", as: QuotaSnapshot.self) { snapshot in
+            completion(QuotaEntry(date: .now, snapshot: snapshot))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<QuotaEntry>) -> Void) {
-        let entry = currentEntry()
-        completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
-    }
-
-    private func currentEntry() -> QuotaEntry {
-        QuotaEntry(date: .now, snapshot: readSnapshot("quota-snapshot.json"))
+        loadSnapshot("quota-snapshot.json", as: QuotaSnapshot.self) { snapshot in
+            let entry = QuotaEntry(date: .now, snapshot: snapshot)
+            completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
+        }
     }
 }
 
@@ -230,16 +260,17 @@ private struct GpuProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (GpuEntry) -> Void) {
-        completion(context.isPreview ? placeholder(in: context) : currentEntry())
+        if context.isPreview { completion(placeholder(in: context)); return }
+        loadSnapshot("gpu-snapshot.json", as: GpuSnapshot.self) { snapshot in
+            completion(GpuEntry(date: .now, snapshot: snapshot))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<GpuEntry>) -> Void) {
-        let entry = currentEntry()
-        completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
-    }
-
-    private func currentEntry() -> GpuEntry {
-        GpuEntry(date: .now, snapshot: readSnapshot("gpu-snapshot.json"))
+        loadSnapshot("gpu-snapshot.json", as: GpuSnapshot.self) { snapshot in
+            let entry = GpuEntry(date: .now, snapshot: snapshot)
+            completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
+        }
     }
 }
 
@@ -376,16 +407,17 @@ private struct DeadlineProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (DeadlineEntry) -> Void) {
-        completion(context.isPreview ? placeholder(in: context) : currentEntry())
+        if context.isPreview { completion(placeholder(in: context)); return }
+        loadSnapshot("deadline-snapshot.json", as: DeadlineSnapshot.self) { snapshot in
+            completion(DeadlineEntry(date: .now, snapshot: snapshot))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<DeadlineEntry>) -> Void) {
-        let entry = currentEntry()
-        completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
-    }
-
-    private func currentEntry() -> DeadlineEntry {
-        DeadlineEntry(date: .now, snapshot: readSnapshot("deadline-snapshot.json"))
+        loadSnapshot("deadline-snapshot.json", as: DeadlineSnapshot.self) { snapshot in
+            let entry = DeadlineEntry(date: .now, snapshot: snapshot)
+            completion(Timeline(entries: [entry], policy: .after(entry.date.addingTimeInterval(5 * 60))))
+        }
     }
 }
 
